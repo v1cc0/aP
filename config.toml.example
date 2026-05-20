@@ -1,0 +1,26 @@
+[app]
+port = 10010
+allow_anonymous_v1 = false
+
+[admin]
+secret = "Vc771202"
+
+[proxy]
+url = "http://192.168.11.111:8787"
+
+[database]
+# Turso/SQLite 本地文件；也可写 sqlite://data/ap.db 或 :memory:
+path = "/home/vc/.ap/ap.db"
+pool_size = 20
+# 实验性 MVCC，写事务使用 BEGIN CONCURRENT
+begin_concurrent = true
+# 实验性 multi-process WAL coordination
+multiprocess_wal = true
+
+[device]
+stabilize_profile = false
+# user_agent = ""
+# package_version = ""
+# runtime_version = ""
+# os = ""
+# arch = ""

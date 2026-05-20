@@ -1,0 +1,22 @@
+# Rust 构建产物
+/target
+
+# 前端依赖 & 构建产物（按需重新生成）
+frontend/node_modules/
+frontend/dist/
+
+# 数据
+config.toml
+/data
+*.db
+CliProxyAPI
+.claude/
+.antigravity/
+
+AGENTS.md
+GEMINI.md
+PROGRESS.md
+PROGRESS.md.lastround
+CLAUDE.md
+INCIDENTS.md
+

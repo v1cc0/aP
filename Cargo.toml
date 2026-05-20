@@ -1,0 +1,72 @@
+[package]
+name = "ap"
+version = "0.0.1"
+edition = "2024"
+
+[dependencies]
+# Web 框架
+axum = { version = "0.8", features = ["macros", "multipart"] }
+axum-extra = { version = "0.12.6", features = ["typed-header"] }
+tower = { version = "0.5", features = ["full"] }
+tower-http = { version = "0.6", features = [
+  "cors",
+  "fs",
+  "compression-gzip",
+  "limit",
+  "trace",
+] }
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures = "0.3"
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+
+# 数据库 — Turso/SQLite 嵌入式引擎
+turso = "0.6.0"
+parking_lot = "0.12"
+
+# HTTP 客户端
+reqwest = { version = "0.13.3", default-features = false, features = [
+  "json",
+  "form",
+  "stream",
+  "gzip",
+  "socks",
+  "rustls",
+] }
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# 工具
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "v5"] }
+rand = "0.10"
+dashmap = "6"
+base64 = "0.22"
+toml = "0.9"
+thiserror = "2"
+anyhow = "1"
+bytes = "1"
+
+# 密码/哈希
+sha2 = "0.11"
+
+# 前端嵌入
+include_dir = "0.7"
+
+# 系统监控
+sysinfo = "0.39"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
