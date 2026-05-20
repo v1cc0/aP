@@ -7,6 +7,7 @@ frontend/dist/
 
 # 数据
 config.toml
+ap.service
 /data
 *.db
 CliProxyAPI
