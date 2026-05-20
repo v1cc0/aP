@@ -2630,33 +2630,30 @@ pub async fn test_proxy(
     }
 
     let client = builder.build().unwrap_or_else(|_| reqwest::Client::new());
-    let test_url = format!("http://ip-api.com/json/?lang={}", lang);
+    // Use HTTPS here. Some forward proxies in the pool only support CONNECT
+    // tunneling and reject plain HTTP absolute-form requests; the previous
+    // ip-api.com HTTP probe made those otherwise valid proxies look broken.
+    let test_url = format!("https://ipwho.is/?lang={}", lang);
 
     let start = std::time::Instant::now();
     match client.get(&test_url).send().await {
         Ok(resp) => {
             let latency_ms = start.elapsed().as_millis() as i64;
             if let Ok(ip_info) = resp.json::<serde_json::Value>().await {
-                if ip_info.get("status").and_then(|s| s.as_str()) == Some("success") {
-                    let ip = ip_info.get("query").and_then(|s| s.as_str()).unwrap_or("").to_string();
-                    let country = ip_info.get("country").and_then(|s| s.as_str()).unwrap_or("").to_string();
-                    let region = ip_info.get("regionName").and_then(|s| s.as_str()).unwrap_or("").to_string();
-                    let city = ip_info.get("city").and_then(|s| s.as_str()).unwrap_or("").to_string();
-                    let isp = ip_info.get("isp").and_then(|s| s.as_str()).unwrap_or("").to_string();
-
-                    let location = format!("{} {} {}", country, region, city).trim().to_string();
+                if let Some(parsed) = parse_proxy_test_geoip(&ip_info) {
+                    let location = parsed.location();
 
                     if let Some(id) = req.id {
-                        let _ = queries::update_proxy_test_result(&state.db(), id, &ip, &location, latency_ms).await;
+                        let _ = queries::update_proxy_test_result(&state.db(), id, &parsed.ip, &location, latency_ms).await;
                     }
 
                     return Json(json!({
                         "success": true,
-                        "ip": ip,
-                        "country": country,
-                        "region": region,
-                        "city": city,
-                        "isp": isp,
+                        "ip": parsed.ip,
+                        "country": parsed.country,
+                        "region": parsed.region,
+                        "city": parsed.city,
+                        "isp": parsed.isp,
                         "location": location,
                         "latency_ms": latency_ms,
                     })).into_response();
@@ -2674,4 +2671,51 @@ pub async fn test_proxy(
             })).into_response()
         }
     }
+}
+
+struct ProxyTestGeoIp {
+    ip: String,
+    country: String,
+    region: String,
+    city: String,
+    isp: String,
+}
+
+impl ProxyTestGeoIp {
+    fn location(&self) -> String {
+        format!("{} {} {}", self.country, self.region, self.city)
+            .trim()
+            .to_string()
+    }
+}
+
+fn parse_proxy_test_geoip(ip_info: &Value) -> Option<ProxyTestGeoIp> {
+    let success = ip_info
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !success {
+        return None;
+    }
+
+    let ip = ip_info.get("ip").and_then(|s| s.as_str())?.to_string();
+    if ip.is_empty() {
+        return None;
+    }
+
+    let isp = ip_info
+        .get("connection")
+        .and_then(|v| v.get("isp"))
+        .and_then(|s| s.as_str())
+        .or_else(|| ip_info.get("connection").and_then(|v| v.get("org")).and_then(|s| s.as_str()))
+        .unwrap_or("")
+        .to_string();
+
+    Some(ProxyTestGeoIp {
+        ip,
+        country: ip_info.get("country").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+        region: ip_info.get("region").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+        city: ip_info.get("city").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+        isp,
+    })
 }
