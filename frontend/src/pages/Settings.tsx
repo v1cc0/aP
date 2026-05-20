@@ -56,6 +56,7 @@ export default function Settings() {
     proxy_pool_enabled: false,
     fast_scheduler_enabled: false,
     max_retries: 2,
+    proxy_url: '',
     allow_remote_migration: false,
     database_driver: 'turso',
     database_label: 'TursoDB',
@@ -416,6 +417,19 @@ export default function Settings() {
                 </div>
               </>
             ) : null}
+            <h3 className="text-base font-semibold text-foreground mb-4 mt-6">{t('settings.proxyUrl')}</h3>
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-4 mb-4">
+              <div>
+                <label className="block mb-2 text-sm font-semibold text-muted-foreground">{t('settings.proxyUrlLabel')}</label>
+                <Input
+                  type="text"
+                  placeholder="http://127.0.0.1:7890"
+                  value={settingsForm.proxy_url ?? ''}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setSettingsForm(f => ({ ...f, proxy_url: e.target.value }))}
+                />
+                <p className="text-xs text-muted-foreground mt-1">{t('settings.proxyUrlDesc')}</p>
+              </div>
+            </div>
             <h3 className="text-base font-semibold text-foreground mb-4 mt-6">{t('settings.autoCleanup')}</h3>
             <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-4 mb-4">
               <div>

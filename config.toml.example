@@ -6,7 +6,7 @@ allow_anonymous_v1 = false
 secret = "Vc771202"
 
 [proxy]
-url = "http://192.168.11.111:8787"
+url = ["http://192.168.11.111:8787", "http://192.168.11.99:8787"]
 
 [database]
 # Turso/SQLite 本地文件；也可写 sqlite://data/ap.db 或 :memory:

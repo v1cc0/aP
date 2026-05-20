@@ -47,16 +47,7 @@ async fn main() {
         .await
         .expect("加载系统设置失败");
 
-    if settings.proxy_url.trim().is_empty() {
-        if let Some(ref default_proxy) = config.proxy_url {
-            settings.proxy_url = default_proxy.clone();
-            if let Err(e) = db::queries::update_system_settings(&boot_pool, &settings).await {
-                error!("同步默认代理配置到数据库失败: {}", e);
-            } else {
-                info!("已自动将 config.toml 中的 proxy.url 同步到数据库系统设置: {}", default_proxy);
-            }
-        }
-    }
+    sync_config_proxies(&boot_pool, &config, &mut settings).await;
 
     // 用 pg_max_conns 兼容字段创建 Turso 逻辑连接上限
     let pool_size = if settings.pg_max_conns > 0 { settings.pg_max_conns as u32 } else { config.db_pool_size };
@@ -225,6 +216,49 @@ async fn main() {
     axum::serve(listener, app)
         .await
         .expect("服务器运行失败");
+}
+
+async fn sync_config_proxies(
+    pool: &db::DbPool,
+    config: &AppConfig,
+    settings: &mut db::models::SystemSettings,
+) {
+    if config.proxy_urls.is_empty() {
+        return;
+    }
+
+    let mut settings_changed = false;
+    if settings.proxy_url.trim().is_empty() {
+        settings.proxy_url = config.proxy_urls[0].clone();
+        settings_changed = true;
+    }
+
+    if config.proxy_urls.len() > 1 {
+        for proxy_url in &config.proxy_urls {
+            match db::queries::insert_proxy(pool, proxy_url, "config.toml").await {
+                Ok(_) => info!(proxy_url = %proxy_url, "已从 config.toml 导入代理池节点"),
+                Err(e) => {
+                    let msg = e.to_string();
+                    if !msg.contains("UNIQUE") && !msg.contains("unique") {
+                        warn!(proxy_url = %proxy_url, error = %e, "从 config.toml 导入代理池节点失败");
+                    }
+                }
+            }
+        }
+
+        if !settings.proxy_pool_enabled {
+            settings.proxy_pool_enabled = true;
+            settings_changed = true;
+        }
+    }
+
+    if settings_changed {
+        if let Err(e) = db::queries::update_system_settings(pool, settings).await {
+            error!("同步 proxy.url 配置到数据库系统设置失败: {}", e);
+        } else {
+            info!(count = config.proxy_urls.len(), "已自动识别 config.toml 中的 proxy.url 配置");
+        }
+    }
 }
 
 /// 构建 axum 路由

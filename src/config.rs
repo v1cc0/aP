@@ -18,8 +18,10 @@ pub struct AppConfig {
     pub db_multiprocess_wal: bool,
     /// 管理后台密钥（可选）
     pub admin_secret: Option<String>,
-    /// 全局默认代理 URL（可选）
+    /// 全局默认代理 URL（可选，兼容旧配置；多代理时为第一条）
     pub proxy_url: Option<String>,
+    /// config.toml 中声明的代理 URL 列表，支持 `url = "..."` 和 `url = ["...", "..."]`
+    pub proxy_urls: Vec<String>,
     /// 显式允许 /v1/* 在未配置 API Key 时无鉴权放行（默认禁止，fail-closed）
     pub allow_anonymous_v1: bool,
 
@@ -56,9 +58,14 @@ struct DatabaseSection {
 }
 
 #[derive(Debug, Default, Deserialize)]
-struct AdminSection { secret: Option<String> }
+struct AdminSection {
+    secret: Option<String>,
+}
 #[derive(Debug, Default, Deserialize)]
-struct ProxySection { url: Option<String> }
+struct ProxySection {
+    #[serde(default, deserialize_with = "deserialize_proxy_urls")]
+    url: Vec<String>,
+}
 
 #[derive(Debug, Default, Deserialize)]
 struct DeviceSection {
@@ -119,6 +126,8 @@ impl AppConfig {
         });
         let database_url = normalize_db_path(path.parent(), &database_path);
 
+        let proxy_urls = normalize_proxy_urls(proxy.url);
+
         Self {
             port: app.port.unwrap_or(8080),
             database_url,
@@ -126,7 +135,8 @@ impl AppConfig {
             db_begin_concurrent: database.begin_concurrent.unwrap_or(true),
             db_multiprocess_wal: database.multiprocess_wal.unwrap_or(true),
             admin_secret: admin.secret.filter(|s| !s.trim().is_empty()),
-            proxy_url: proxy.url.filter(|s| !s.trim().is_empty()),
+            proxy_url: proxy_urls.first().cloned(),
+            proxy_urls,
             allow_anonymous_v1: app.allow_anonymous_v1.unwrap_or(false),
             device_user_agent: device.user_agent.filter(|s| !s.trim().is_empty()),
             device_package_version: device.package_version.filter(|s| !s.trim().is_empty()),
@@ -138,6 +148,39 @@ impl AppConfig {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ProxyUrlValue {
+    One(String),
+    Many(Vec<String>),
+}
+
+fn deserialize_proxy_urls<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let Some(value) = Option::<ProxyUrlValue>::deserialize(deserializer)? else {
+        return Ok(Vec::new());
+    };
+
+    Ok(match value {
+        ProxyUrlValue::One(url) => vec![url],
+        ProxyUrlValue::Many(urls) => urls,
+    })
+}
+
+fn normalize_proxy_urls(urls: Vec<String>) -> Vec<String> {
+    let mut out = Vec::new();
+    for url in urls {
+        let url = url.trim();
+        if url.is_empty() || out.iter().any(|existing| existing == url) {
+            continue;
+        }
+        out.push(url.to_string());
+    }
+    out
+}
+
 fn normalize_db_path(config_dir: Option<&Path>, value: &str) -> String {
     let value = value.strip_prefix("sqlite://").unwrap_or(value);
     if value == ":memory:" {
@@ -147,7 +190,11 @@ fn normalize_db_path(config_dir: Option<&Path>, value: &str) -> String {
     if p.is_absolute() {
         p.to_string_lossy().to_string()
     } else {
-        config_dir.unwrap_or_else(|| Path::new(".")).join(p).to_string_lossy().to_string()
+        config_dir
+            .unwrap_or_else(|| Path::new("."))
+            .join(p)
+            .to_string_lossy()
+            .to_string()
     }
 }
 
@@ -158,8 +205,14 @@ mod tests {
     #[test]
     fn test_normalize_db_path() {
         assert_eq!(normalize_db_path(None, ":memory:"), ":memory:");
-        assert_eq!(normalize_db_path(Some(Path::new("/etc")), "/var/lib/ap.db"), "/var/lib/ap.db");
-        assert_eq!(normalize_db_path(Some(Path::new("/home/user/.ap")), "ap.db"), "/home/user/.ap/ap.db");
+        assert_eq!(
+            normalize_db_path(Some(Path::new("/etc")), "/var/lib/ap.db"),
+            "/var/lib/ap.db"
+        );
+        assert_eq!(
+            normalize_db_path(Some(Path::new("/home/user/.ap")), "ap.db"),
+            "/home/user/.ap/ap.db"
+        );
         assert_eq!(normalize_db_path(None, "ap.db"), "./ap.db");
     }
 
@@ -174,5 +227,30 @@ mod tests {
         unsafe {
             std::env::remove_var("CODEX_CONFIG");
         }
+    }
+
+    #[test]
+    fn test_proxy_url_accepts_string_or_array() {
+        let one: FileConfig = toml::from_str(
+            r#"[proxy]
+url = "http://127.0.0.1:7890"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            normalize_proxy_urls(one.proxy.unwrap().url),
+            vec!["http://127.0.0.1:7890"]
+        );
+
+        let many: FileConfig = toml::from_str(
+            r#"[proxy]
+url = ["http://192.168.11.111:8787", "http://192.168.11.99:8787"]
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            normalize_proxy_urls(many.proxy.unwrap().url),
+            vec!["http://192.168.11.111:8787", "http://192.168.11.99:8787"]
+        );
     }
 }

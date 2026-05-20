@@ -54,8 +54,8 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': 'http://localhost:8080',
-      '/health': 'http://localhost:8080'
+      '/api': process.env.VITE_API_PROXY_TARGET || 'http://localhost:10010',
+      '/health': process.env.VITE_API_PROXY_TARGET || 'http://localhost:10010'
     }
   }
 })
