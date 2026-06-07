@@ -29,7 +29,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 
 # 数据库 — Turso/SQLite 嵌入式引擎
-turso = "0.6.0"
+turso = "0.6.1"
 parking_lot = "0.12"
 
 # HTTP 客户端
