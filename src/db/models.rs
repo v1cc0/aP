@@ -71,6 +71,12 @@ pub struct UsageLog {
     pub service_tier: String,
     pub account_email: String,
     pub cost: f64,
+    pub tt_request_id: String,
+    pub tt_user_id: String,
+    pub tt_api_key_id: String,
+    pub tt_group_id: String,
+    pub tt_provider_account_id: String,
+    pub tt_provider_platform: String,
     pub created_at: String,
 }
 
@@ -95,6 +101,12 @@ pub struct UsageLogRow {
     pub stream: bool,
     pub service_tier: String,
     pub account_email: String,
+    pub tt_request_id: String,
+    pub tt_user_id: String,
+    pub tt_api_key_id: String,
+    pub tt_group_id: String,
+    pub tt_provider_account_id: String,
+    pub tt_provider_platform: String,
     pub created_at: String,
 }
 

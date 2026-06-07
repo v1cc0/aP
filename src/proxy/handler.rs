@@ -26,6 +26,39 @@ pub enum ProxyMode {
     Compact,
 }
 
+#[derive(Debug, Clone, Default)]
+struct TtContext {
+    request_id: String,
+    user_id: String,
+    api_key_id: String,
+    group_id: String,
+    provider_account_id: String,
+    provider_platform: String,
+}
+
+impl TtContext {
+    fn from_headers(headers: &HeaderMap) -> Self {
+        fn header_string(headers: &HeaderMap, name: &str) -> String {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("")
+                .to_string()
+        }
+
+        Self {
+            request_id: header_string(headers, "x-tt-request-id"),
+            user_id: header_string(headers, "x-tt-user-id"),
+            api_key_id: header_string(headers, "x-tt-api-key-id"),
+            group_id: header_string(headers, "x-tt-group-id"),
+            provider_account_id: header_string(headers, "x-tt-provider-account-id"),
+            provider_platform: header_string(headers, "x-tt-provider-platform"),
+        }
+    }
+}
+
 impl ProxyMode {
     fn upstream_path(self) -> &'static str {
         match self {
@@ -186,6 +219,7 @@ async fn proxy_request(
 ) -> Response {
     let start = Instant::now();
     let max_retries = state.settings.read().await.max_retries;
+    let tt_context = TtContext::from_headers(&headers);
 
     // 解析请求体
     let body_json: Value = match serde_json::from_slice(&body) {
@@ -386,6 +420,7 @@ async fn proxy_request(
                         return collect_compact_response(
                             resp,
                             state.clone(),
+                            tt_context.clone(),
                             account.db_id,
                             endpoint,
                             &model,
@@ -396,7 +431,7 @@ async fn proxy_request(
                         .await;
                     }
 
-                    if is_stream || translate {
+                    if is_stream {
                         // Peek 第一个 chunk — 在返回 SSE 响应之前验证上游是否真正开始输出
                         let mut stream = resp.bytes_stream();
                         match peek_first_chunk(&mut stream).await {
@@ -407,6 +442,7 @@ async fn proxy_request(
                                     stream,
                                     translate,
                                     state.clone(),
+                                    tt_context.clone(),
                                     account.db_id,
                                     endpoint,
                                     &model,
@@ -449,7 +485,9 @@ async fn proxy_request(
                         // sync 模式（Codex 仍返回 SSE，需读取流提取完整响应 + usage）
                         return collect_sync_response(
                             resp,
+                            translate,
                             state.clone(),
+                            tt_context.clone(),
                             account.db_id,
                             endpoint,
                             &model,
@@ -501,7 +539,7 @@ async fn proxy_request(
                     &state, account.db_id, endpoint, &model,
                     status_u16 as i64, duration, is_stream, &account_email,
                     &UsageInfo { input_tokens: 0, output_tokens: 0, reasoning_tokens: 0, cached_tokens: 0, total_tokens: 0 },
-                    0, &reasoning_effort, "",
+                    0, &reasoning_effort, "", &tt_context,
                 ).await;
 
                 let err_kind = &upstream_kind;
@@ -658,7 +696,7 @@ async fn proxy_request(
                     &state, account.db_id, endpoint, &model,
                     499, duration, is_stream, &account_email,
                     &UsageInfo { input_tokens: 0, output_tokens: 0, reasoning_tokens: 0, cached_tokens: 0, total_tokens: 0 },
-                    0, &reasoning_effort, "",
+                    0, &reasoning_effort, "", &tt_context,
                 ).await;
 
                 if e.is_timeout() {
@@ -759,6 +797,7 @@ async fn stream_response_with_tracking(
     remaining_stream: impl Stream<Item = Result<Bytes, reqwest::Error>> + Send + Unpin + 'static,
     translate: bool,
     state: Arc<AppState>,
+    tt_context: TtContext,
     account_id: i64,
     endpoint: &str,
     model: &str,
@@ -772,6 +811,7 @@ async fn stream_response_with_tracking(
     let model = model.to_string();
     let email = email.to_string();
     let effort = reasoning_effort.to_string();
+    let tt_context = tt_context.clone();
 
     tokio::spawn(async move {
         let mut translator = StreamTranslator::new();
@@ -927,7 +967,7 @@ async fn stream_response_with_tracking(
             send_usage_log(
                 &state, account_id, &endpoint, &model,
                 log_status as i64, duration, true, &email,
-                &usage, first_token_ms, &effort, &service_tier,
+                &usage, first_token_ms, &effort, &service_tier, &tt_context,
             )
             .await;
         }
@@ -950,6 +990,7 @@ async fn stream_response_with_tracking(
 async fn collect_compact_response(
     resp: reqwest::Response,
     state: Arc<AppState>,
+    tt_context: TtContext,
     account_id: i64,
     endpoint: &str,
     model: &str,
@@ -1013,6 +1054,7 @@ async fn collect_compact_response(
     let model = model.to_string();
     let email = email.to_string();
     let effort = reasoning_effort.to_string();
+    let tt_context = tt_context.clone();
 
     tokio::spawn(async move {
         send_usage_log(
@@ -1028,6 +1070,7 @@ async fn collect_compact_response(
             0,
             &effort,
             &service_tier,
+            &tt_context,
         )
         .await;
     });
@@ -1042,7 +1085,9 @@ async fn collect_compact_response(
 /// sync 模式 — 读取 SSE 流收集完整响应，一次性返回 JSON
 async fn collect_sync_response(
     resp: reqwest::Response,
+    translate: bool,
     state: Arc<AppState>,
+    tt_context: TtContext,
     account_id: i64,
     endpoint: &str,
     model: &str,
@@ -1053,18 +1098,17 @@ async fn collect_sync_response(
     let mut translator = StreamTranslator::new();
     let mut stream = resp.bytes_stream();
     let mut first_token_time: Option<Instant> = None;
-    let mut last_completed_data: Option<Vec<u8>> = None;
+    let mut raw_sse = Vec::new();
 
     while let Some(chunk) = stream.next().await {
         match chunk {
             Ok(data) => {
+                raw_sse.extend_from_slice(&data);
                 translator.track_raw_chunk(&data);
                 if translator.first_delta_received && first_token_time.is_none() {
                     first_token_time = Some(Instant::now());
                 }
-                // 保存包含 response.completed 的 SSE 事件
                 if translator.completed {
-                    last_completed_data = Some(data.to_vec());
                     break;
                 }
             }
@@ -1097,6 +1141,7 @@ async fn collect_sync_response(
     let model = model.to_string();
     let email = email.to_string();
     let effort = reasoning_effort.to_string();
+    let tt_context = tt_context.clone();
 
     tokio::spawn({
         let state = state.clone();
@@ -1109,41 +1154,85 @@ async fn collect_sync_response(
             send_usage_log(
                 &state, account_id, &endpoint, &model,
                 log_status, duration, false, &email,
-                &usage, first_token_ms, &effort, &service_tier,
+                &usage, first_token_ms, &effort, &service_tier, &tt_context,
             ).await;
         }
     });
 
-    // 从 completed 事件中提取完整响应 JSON 返回给客户端
-    let body_bytes = if let Some(raw) = last_completed_data {
-        // SSE 行格式: "data: {...}\n\n"，提取 JSON 中的 response 字段
-        let text = String::from_utf8_lossy(&raw);
-        let mut result = Vec::new();
-        for line in text.lines() {
-            if let Some(json_str) = line.strip_prefix("data: ") {
-                if let Ok(event) = serde_json::from_str::<Value>(json_str) {
-                    if let Some(resp_obj) = event.get("response") {
-                        result = serde_json::to_vec(resp_obj).unwrap_or_default();
-                        break;
-                    }
-                }
-            }
-        }
-        if result.is_empty() {
-            // 回退：直接用 pending 中缓存的最后完整行
-            b"{}".to_vec()
-        } else {
-            result
-        }
-    } else {
+    // 从完整 SSE 中重建非流式响应。部分 Codex completed.response 会带
+    // `output: []`，真实文本只出现在前面的 response.output_text.delta 事件里。
+    let body_bytes = build_sync_response_body(&raw_sse, translate).unwrap_or_else(|err| {
+        warn!(error = %err, "sync 响应重建失败");
         b"{}".to_vec()
-    };
+    });
 
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "application/json")
         .body(Body::from(body_bytes))
         .unwrap()
+}
+
+fn build_sync_response_body(raw_sse: &[u8], translate: bool) -> anyhow::Result<Vec<u8>> {
+    let text = String::from_utf8_lossy(raw_sse);
+    let mut output_text = String::new();
+    let mut completed_response: Option<Value> = None;
+
+    for line in text.lines() {
+        let Some(json_str) = line.strip_prefix("data: ") else {
+            continue;
+        };
+        if json_str == "[DONE]" {
+            continue;
+        }
+        let event: Value = match serde_json::from_str(json_str) {
+            Ok(event) => event,
+            Err(_) => continue,
+        };
+        match event.get("type").and_then(|value| value.as_str()).unwrap_or("") {
+            "response.output_text.delta" => {
+                if let Some(delta) = event.get("delta").and_then(|value| value.as_str()) {
+                    output_text.push_str(delta);
+                }
+            }
+            "response.completed" => {
+                if let Some(response) = event.get("response").cloned() {
+                    completed_response = Some(response);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut response = completed_response.unwrap_or_else(|| serde_json::json!({}));
+    if !output_text.is_empty() {
+        let output_is_empty = response
+            .get("output")
+            .and_then(|value| value.as_array())
+            .map(|items| items.is_empty())
+            .unwrap_or(true);
+        if output_is_empty {
+            response["output"] = serde_json::json!([{
+                "type": "message",
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": output_text,
+                }],
+            }]);
+        }
+        if response.get("output_text").is_none() || response["output_text"].is_null() {
+            response["output_text"] = response["output"][0]["content"][0]["text"].clone();
+        }
+    }
+
+    let response_bytes = serde_json::to_vec(&response)?;
+    if translate {
+        let (chat_bytes, _) = translator::translate_response_to_chat(&response_bytes)?;
+        Ok(chat_bytes)
+    } else {
+        Ok(response_bytes)
+    }
 }
 
 // ─── 辅助函数 ───
@@ -1468,6 +1557,7 @@ async fn send_usage_log(
     first_token_ms: i64,
     reasoning_effort: &str,
     service_tier: &str,
+    tt_context: &TtContext,
 ) {
     use crate::db::models::UsageLog;
 
@@ -1500,6 +1590,12 @@ async fn send_usage_log(
         service_tier: service_tier.to_string(),
         account_email: email.to_string(),
         cost: cost_breakdown.total_cost,
+        tt_request_id: tt_context.request_id.clone(),
+        tt_user_id: tt_context.user_id.clone(),
+        tt_api_key_id: tt_context.api_key_id.clone(),
+        tt_group_id: tt_context.group_id.clone(),
+        tt_provider_account_id: tt_context.provider_account_id.clone(),
+        tt_provider_platform: tt_context.provider_platform.clone(),
         created_at: String::new(),
     };
     let _ = state.log_sender.send(log).await;
@@ -1988,5 +2084,35 @@ mod tests {
         *acc.plan_type.write() = "free".to_string();
         // free 计划无信号 fallback 到 7d
         assert_eq!(parse_rate_limit_cooldown(&h, "", &acc), 7 * 24 * 3600);
+    }
+
+    #[test]
+    fn sync_response_body_rebuilds_output_from_sse_deltas() {
+        let raw = concat!(
+            "event: response.output_text.delta\n",
+            "data: {\"type\":\"response.output_text.delta\",\"response_id\":\"resp_1\",\"delta\":\"pong\"}\n\n",
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"model\":\"gpt-5.4-mini\",\"output\":[],\"usage\":{\"input_tokens\":11,\"output_tokens\":5,\"total_tokens\":16}}}\n\n",
+        );
+
+        let bytes = build_sync_response_body(raw.as_bytes(), false).unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["output_text"], "pong");
+        assert_eq!(body["output"][0]["content"][0]["text"], "pong");
+        assert_eq!(body["usage"]["total_tokens"], 16);
+    }
+
+    #[test]
+    fn sync_response_body_translates_chat_when_requested() {
+        let raw = concat!(
+            "data: {\"type\":\"response.output_text.delta\",\"response_id\":\"resp_1\",\"delta\":\"pong\"}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"model\":\"gpt-5.4-mini\",\"output\":[],\"usage\":{\"input_tokens\":11,\"output_tokens\":5,\"total_tokens\":16}}}\n\n",
+        );
+
+        let bytes = build_sync_response_body(raw.as_bytes(), true).unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["object"], "chat.completion");
+        assert_eq!(body["choices"][0]["message"]["content"], "pong");
+        assert_eq!(body["usage"]["total_tokens"], 16);
     }
 }

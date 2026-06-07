@@ -222,6 +222,8 @@ async fn create_tables(pool: &DbPool) -> Result<()> {
             cached_tokens INTEGER NOT NULL DEFAULT 0, first_token_ms INTEGER NOT NULL DEFAULT 0, reasoning_effort TEXT NOT NULL DEFAULT '',
             status_code INTEGER NOT NULL DEFAULT 0, duration_ms INTEGER NOT NULL DEFAULT 0, stream INTEGER NOT NULL DEFAULT 0,
             service_tier TEXT NOT NULL DEFAULT '', account_email TEXT NOT NULL DEFAULT '', cost REAL NOT NULL DEFAULT 0,
+            tt_request_id TEXT NOT NULL DEFAULT '', tt_user_id TEXT NOT NULL DEFAULT '', tt_api_key_id TEXT NOT NULL DEFAULT '',
+            tt_group_id TEXT NOT NULL DEFAULT '', tt_provider_account_id TEXT NOT NULL DEFAULT '', tt_provider_platform TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')))",
         "CREATE INDEX IF NOT EXISTS idx_usage_logs_created ON usage_logs(created_at)",
         "CREATE INDEX IF NOT EXISTS idx_usage_logs_status ON usage_logs(created_at, status_code)",
@@ -252,6 +254,12 @@ async fn create_tables(pool: &DbPool) -> Result<()> {
     for sql in [
         "ALTER TABLE accounts ADD COLUMN enable_scheduling INTEGER NOT NULL DEFAULT 1",
         "ALTER TABLE usage_logs ADD COLUMN cost REAL NOT NULL DEFAULT 0",
+        "ALTER TABLE usage_logs ADD COLUMN tt_request_id TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE usage_logs ADD COLUMN tt_user_id TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE usage_logs ADD COLUMN tt_api_key_id TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE usage_logs ADD COLUMN tt_group_id TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE usage_logs ADD COLUMN tt_provider_account_id TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE usage_logs ADD COLUMN tt_provider_platform TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE system_settings ADD COLUMN pg_max_conns INTEGER NOT NULL DEFAULT 256",
         "ALTER TABLE system_settings ADD COLUMN proxy_pool_enabled INTEGER NOT NULL DEFAULT 0",
     ] { let _ = pool.execute(sql, vec![]).await; }

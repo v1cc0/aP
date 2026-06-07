@@ -27,7 +27,10 @@ fn usage_log_row(r: &DbRow) -> Result<UsageLogRow> {
         prompt_tokens: r.get_i32("prompt_tokens")?, completion_tokens: r.get_i32("completion_tokens")?, total_tokens: r.get_i32("total_tokens")?,
         input_tokens: r.get_i32("input_tokens")?, output_tokens: r.get_i32("output_tokens")?, reasoning_tokens: r.get_i32("reasoning_tokens")?, cached_tokens: r.get_i32("cached_tokens")?,
         first_token_ms: r.get_i32("first_token_ms")?, reasoning_effort: r.get_string("reasoning_effort")?, status_code: r.get_i32("status_code")?, duration_ms: r.get_i32("duration_ms")?,
-        stream: r.get_bool("stream")?, service_tier: r.get_string("service_tier")?, account_email: r.get_string("account_email")?, created_at: r.get_string("created_at")?,
+        stream: r.get_bool("stream")?, service_tier: r.get_string("service_tier")?, account_email: r.get_string("account_email")?,
+        tt_request_id: r.get_string("tt_request_id")?, tt_user_id: r.get_string("tt_user_id")?, tt_api_key_id: r.get_string("tt_api_key_id")?,
+        tt_group_id: r.get_string("tt_group_id")?, tt_provider_account_id: r.get_string("tt_provider_account_id")?, tt_provider_platform: r.get_string("tt_provider_platform")?,
+        created_at: r.get_string("created_at")?,
     })
 }
 
@@ -123,14 +126,14 @@ pub async fn batch_insert_usage_logs(pool: &DbPool, logs: &[UsageLog]) -> Result
 }
 
 async fn insert_usage_logs_chunk(pool: &DbPool, logs: &[UsageLog]) -> Result<()> {
-    let mut query = String::from("INSERT INTO usage_logs (account_id, endpoint, model, prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens, reasoning_tokens, cached_tokens, first_token_ms, reasoning_effort, status_code, duration_ms, stream, service_tier, account_email, cost) VALUES ");
-    let mut params = Vec::with_capacity(logs.len() * 18);
+    let mut query = String::from("INSERT INTO usage_logs (account_id, endpoint, model, prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens, reasoning_tokens, cached_tokens, first_token_ms, reasoning_effort, status_code, duration_ms, stream, service_tier, account_email, cost, tt_request_id, tt_user_id, tt_api_key_id, tt_group_id, tt_provider_account_id, tt_provider_platform) VALUES ");
+    let mut params = Vec::with_capacity(logs.len() * 24);
     let mut p = 1;
     for (i, log) in logs.iter().enumerate() {
         if i > 0 { query.push(','); }
-        let qs = (p..p+18).map(|n| format!("?{n}")).collect::<Vec<_>>().join(",");
-        query.push('('); query.push_str(&qs); query.push(')'); p += 18;
-        params.extend([v_i64(log.account_id), v_str(&log.endpoint), v_str(&log.model), v_i64(log.prompt_tokens), v_i64(log.completion_tokens), v_i64(log.total_tokens), v_i64(log.input_tokens), v_i64(log.output_tokens), v_i64(log.reasoning_tokens), v_i64(log.cached_tokens), v_i64(log.first_token_ms), v_str(&log.reasoning_effort), v_i64(log.status_code), v_i64(log.duration_ms), v_bool(log.stream), v_str(&log.service_tier), v_str(&log.account_email), v_f64(log.cost)]);
+        let qs = (p..p+24).map(|n| format!("?{n}")).collect::<Vec<_>>().join(",");
+        query.push('('); query.push_str(&qs); query.push(')'); p += 24;
+        params.extend([v_i64(log.account_id), v_str(&log.endpoint), v_str(&log.model), v_i64(log.prompt_tokens), v_i64(log.completion_tokens), v_i64(log.total_tokens), v_i64(log.input_tokens), v_i64(log.output_tokens), v_i64(log.reasoning_tokens), v_i64(log.cached_tokens), v_i64(log.first_token_ms), v_str(&log.reasoning_effort), v_i64(log.status_code), v_i64(log.duration_ms), v_bool(log.stream), v_str(&log.service_tier), v_str(&log.account_email), v_f64(log.cost), v_str(&log.tt_request_id), v_str(&log.tt_user_id), v_str(&log.tt_api_key_id), v_str(&log.tt_group_id), v_str(&log.tt_provider_account_id), v_str(&log.tt_provider_platform)]);
     }
     pool.execute_write(&query, params).await?;
     Ok(())
@@ -166,7 +169,7 @@ pub async fn query_usage_logs_filtered(pool: &DbPool, page: i64, page_size: i64,
     let where_sql = where_clauses.join(" AND ");
     let count_sql = format!("SELECT COUNT(*) AS total FROM usage_logs WHERE {where_sql}");
     let total = pool.query_one(&count_sql, params.clone()).await?.get_i64("total")?;
-    let data_sql = format!("SELECT id, account_id, endpoint, model, prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens, reasoning_tokens, cached_tokens, first_token_ms, reasoning_effort, status_code, duration_ms, stream, service_tier, account_email, created_at FROM usage_logs WHERE {where_sql} ORDER BY created_at DESC LIMIT {page_size} OFFSET {offset}");
+    let data_sql = format!("SELECT id, account_id, endpoint, model, prompt_tokens, completion_tokens, total_tokens, input_tokens, output_tokens, reasoning_tokens, cached_tokens, first_token_ms, reasoning_effort, status_code, duration_ms, stream, service_tier, account_email, tt_request_id, tt_user_id, tt_api_key_id, tt_group_id, tt_provider_account_id, tt_provider_platform, created_at FROM usage_logs WHERE {where_sql} ORDER BY created_at DESC LIMIT {page_size} OFFSET {offset}");
     let rows = pool.query_all(&data_sql, params).await?;
     Ok((rows.iter().map(usage_log_row).collect::<Result<Vec<_>>>()?, total))
 }
