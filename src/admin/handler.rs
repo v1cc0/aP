@@ -503,8 +503,8 @@ pub async fn batch_import(
                         ..Default::default()
                     };
 
-                    match queries::insert_account(&state.db(), &info.email, &creds, &proxy_url).await {
-                        Ok(id) => {
+                    match queries::insert_account_if_new_identity(&state.db(), &info.email, &creds, &proxy_url).await {
+                        Ok(Some(id)) => {
                             let account = Arc::new(Account::new(id));
                             *account.email.write() = info.email.clone();
                             *account.plan_type.write() = info.chatgpt_plan_type;
@@ -515,6 +515,9 @@ pub async fn batch_import(
                             state.scheduler.add_account(account);
                             queries::insert_account_event(&state.db(), id, "added", "batch_import").await;
                             json!({"email": info.email, "status": "ok", "id": id})
+                        }
+                        Ok(None) => {
+                            json!({"email": info.email, "status": "duplicate", "reason": "identity already exists"})
                         }
                         Err(e) => {
                             json!({"token": &rt[..rt.len().min(8)], "status": "error", "error": e.to_string()})
@@ -2117,6 +2120,7 @@ async fn import_at_txt(
         let sem = Arc::new(tokio::sync::Semaphore::new(20));
         let success = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let failed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let duplicate = Arc::new(std::sync::atomic::AtomicUsize::new(duplicate_count));
         let current = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut handles = Vec::new();
 
@@ -2126,6 +2130,7 @@ async fn import_at_txt(
             let proxy_url = proxy_url.clone();
             let success = success.clone();
             let failed = failed.clone();
+            let duplicate = duplicate.clone();
             let current = current.clone();
 
             handles.push(tokio::spawn(async move {
@@ -2154,8 +2159,8 @@ async fn import_at_txt(
                     info.email.clone()
                 };
 
-                match queries::insert_at_account(&state.db(), &name, &creds, &proxy_url).await {
-                    Ok(id) => {
+                match queries::insert_at_account_if_new_identity(&state.db(), &name, &creds, &proxy_url).await {
+                    Ok(Some(id)) => {
                         let account = Arc::new(Account::new(id));
                         *account.email.write() = info.email;
                         *account.plan_type.write() = info.chatgpt_plan_type;
@@ -2166,6 +2171,9 @@ async fn import_at_txt(
                         state.scheduler.add_account(account);
                         queries::insert_account_event(&state.db(), id, "added", "import_at").await;
                         success.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok(None) => {
+                        duplicate.fetch_add(1, Ordering::Relaxed);
                     }
                     Err(_) => {
                         failed.fetch_add(1, Ordering::Relaxed);
@@ -2179,16 +2187,18 @@ async fn import_at_txt(
         let tx2 = tx.clone();
         let success2 = success.clone();
         let failed2 = failed.clone();
+        let duplicate2 = duplicate.clone();
         let current2 = current.clone();
         let progress_handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
             loop {
                 interval.tick().await;
+                let dup = duplicate2.load(Ordering::Relaxed);
                 let cur = current2.load(Ordering::Relaxed) + duplicate_count;
                 let suc = success2.load(Ordering::Relaxed);
                 let fai = failed2.load(Ordering::Relaxed);
                 let _ = tx2
-                    .send(sse_event("progress", cur, total, suc, duplicate_count, fai))
+                    .send(sse_event("progress", cur, total, suc, dup, fai))
                     .await;
                 if cur >= total {
                     break;
@@ -2203,8 +2213,9 @@ async fn import_at_txt(
 
         let suc = success.load(Ordering::Relaxed);
         let fai = failed.load(Ordering::Relaxed);
+        let dup = duplicate.load(Ordering::Relaxed);
         let _ = tx
-            .send(sse_event("complete", total, total, suc, duplicate_count, fai))
+            .send(sse_event("complete", total, total, suc, dup, fai))
             .await;
     });
 
@@ -2267,6 +2278,7 @@ async fn import_rt_txt(
         let sem = Arc::new(tokio::sync::Semaphore::new(10));
         let success = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let failed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let duplicate = Arc::new(std::sync::atomic::AtomicUsize::new(duplicate_count));
         let current = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut handles = Vec::new();
 
@@ -2277,6 +2289,7 @@ async fn import_rt_txt(
             let proxy_url = proxy_url.clone();
             let success = success.clone();
             let failed = failed.clone();
+            let duplicate = duplicate.clone();
             let current = current.clone();
 
             handles.push(tokio::spawn(async move {
@@ -2304,19 +2317,25 @@ async fn import_rt_txt(
                         };
 
                         let name = if info.email.is_empty() { rt[..8.min(rt.len())].to_string() } else { info.email.clone() };
-                        if let Ok(id) = queries::insert_account(&state.db(), &name, &creds, &proxy_url).await {
-                            let account = Arc::new(Account::new(id));
-                            *account.email.write() = info.email;
-                            *account.plan_type.write() = info.chatgpt_plan_type;
-                            *account.proxy_url.write() = proxy_url;
-                            *account.access_token.write() = token_resp.access_token;
-                            *account.refresh_token.write() = creds.refresh_token;
-                            *account.expires_at.write() = expires_at;
-                            state.scheduler.add_account(account);
-                            queries::insert_account_event(&state.db(), id, "added", "import_rt").await;
-                            success.fetch_add(1, Ordering::Relaxed);
-                        } else {
-                            failed.fetch_add(1, Ordering::Relaxed);
+                        match queries::insert_account_if_new_identity(&state.db(), &name, &creds, &proxy_url).await {
+                            Ok(Some(id)) => {
+                                let account = Arc::new(Account::new(id));
+                                *account.email.write() = info.email;
+                                *account.plan_type.write() = info.chatgpt_plan_type;
+                                *account.proxy_url.write() = proxy_url;
+                                *account.access_token.write() = token_resp.access_token;
+                                *account.refresh_token.write() = creds.refresh_token;
+                                *account.expires_at.write() = expires_at;
+                                state.scheduler.add_account(account);
+                                queries::insert_account_event(&state.db(), id, "added", "import_rt").await;
+                                success.fetch_add(1, Ordering::Relaxed);
+                            }
+                            Ok(None) => {
+                                duplicate.fetch_add(1, Ordering::Relaxed);
+                            }
+                            Err(_) => {
+                                failed.fetch_add(1, Ordering::Relaxed);
+                            }
                         }
                     }
                     Err(_) => {
@@ -2331,16 +2350,18 @@ async fn import_rt_txt(
         let tx2 = tx.clone();
         let success2 = success.clone();
         let failed2 = failed.clone();
+        let duplicate2 = duplicate.clone();
         let current2 = current.clone();
         let progress_handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
             loop {
                 interval.tick().await;
+                let dup = duplicate2.load(Ordering::Relaxed);
                 let cur = current2.load(Ordering::Relaxed) + duplicate_count;
                 let suc = success2.load(Ordering::Relaxed);
                 let fai = failed2.load(Ordering::Relaxed);
                 let _ = tx2
-                    .send(sse_event("progress", cur, total, suc, duplicate_count, fai))
+                    .send(sse_event("progress", cur, total, suc, dup, fai))
                     .await;
                 if cur >= total {
                     break;
@@ -2355,8 +2376,9 @@ async fn import_rt_txt(
 
         let suc = success.load(Ordering::Relaxed);
         let fai = failed.load(Ordering::Relaxed);
+        let dup = duplicate.load(Ordering::Relaxed);
         let _ = tx
-            .send(sse_event("complete", total, total, suc, duplicate_count, fai))
+            .send(sse_event("complete", total, total, suc, dup, fai))
             .await;
     });
 

@@ -69,10 +69,46 @@ pub async fn insert_account(pool: &DbPool, name: &str, creds: &Credentials, prox
     row.get_i64("id")
 }
 
+pub async fn insert_account_if_new_identity(pool: &DbPool, name: &str, creds: &Credentials, proxy_url: &str) -> Result<Option<i64>> {
+    insert_account_with_identity(pool, name, "oauth", creds, proxy_url).await
+}
+
 pub async fn insert_at_account(pool: &DbPool, name: &str, creds: &Credentials, proxy_url: &str) -> Result<i64> {
     let creds_json = serde_json::to_string(creds)?;
     let row = pool.query_one_write("INSERT INTO accounts (name, type, credentials, proxy_url) VALUES (?1, 'at', ?2, ?3) RETURNING id", vec![v_str(name), v_string(creds_json), v_str(proxy_url)]).await?;
     row.get_i64("id")
+}
+
+pub async fn insert_at_account_if_new_identity(pool: &DbPool, name: &str, creds: &Credentials, proxy_url: &str) -> Result<Option<i64>> {
+    insert_account_with_identity(pool, name, "at", creds, proxy_url).await
+}
+
+async fn insert_account_with_identity(pool: &DbPool, name: &str, account_type: &str, creds: &Credentials, proxy_url: &str) -> Result<Option<i64>> {
+    let creds_json = serde_json::to_string(creds)?;
+    let email = creds.email.trim().to_ascii_lowercase();
+    let account_id = creds.account_id.trim().to_string();
+    let rows = pool.query_all_write(
+        "INSERT INTO accounts (name, type, credentials, proxy_url)
+         SELECT ?1, ?2, ?3, ?4
+         WHERE NOT EXISTS (
+             SELECT 1 FROM accounts
+             WHERE status != 'deleted'
+               AND (
+                   (?5 != '' AND lower(COALESCE(json_extract(credentials, '$.email'), '')) = ?5)
+                   OR (?5 = '' AND ?6 != '' AND COALESCE(json_extract(credentials, '$.account_id'), '') = ?6)
+               )
+         )
+         RETURNING id",
+        vec![
+            v_str(name),
+            v_str(account_type),
+            v_string(creds_json),
+            v_str(proxy_url),
+            v_string(email),
+            v_string(account_id),
+        ],
+    ).await?;
+    rows.into_iter().next().map(|row| row.get_i64("id")).transpose()
 }
 
 pub async fn get_all_access_tokens(pool: &DbPool) -> Result<std::collections::HashSet<String>> {
@@ -327,4 +363,98 @@ pub async fn batch_delete_proxies(pool: &DbPool, ids: &[i64]) -> Result<()> {
     let params = ids.iter().map(|&id| v_i64(id)).collect();
     pool.execute_write(&sql, params).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn test_pool(name: &str) -> (DbPool, std::path::PathBuf) {
+        let path = std::env::temp_dir().join(format!(
+            "ap-query-test-{name}-{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+        let pool = crate::db::init(path.to_str().unwrap(), 1, false, false)
+            .await
+            .expect("init test db");
+        (pool, path)
+    }
+
+    fn cleanup_test_db(path: std::path::PathBuf) {
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    #[tokio::test]
+    async fn insert_account_if_new_identity_dedupes_rotated_refresh_tokens_by_email() {
+        let (pool, path) = test_pool("identity-email").await;
+        let first = Credentials {
+            refresh_token: "rotated-rt-1".to_string(),
+            access_token: "at-1".to_string(),
+            email: "User@Example.Test".to_string(),
+            account_id: "team-account".to_string(),
+            ..Default::default()
+        };
+        let second = Credentials {
+            refresh_token: "rotated-rt-2".to_string(),
+            access_token: "at-2".to_string(),
+            email: "user@example.test".to_string(),
+            account_id: "team-account".to_string(),
+            ..Default::default()
+        };
+
+        let id = insert_account_if_new_identity(&pool, "user@example.test", &first, "")
+            .await
+            .expect("first insert");
+        assert_eq!(id, Some(1));
+
+        let duplicate = insert_account_if_new_identity(&pool, "user@example.test", &second, "")
+            .await
+            .expect("duplicate insert");
+        assert_eq!(duplicate, None);
+
+        let count = pool
+            .query_one("SELECT COUNT(*) AS n FROM accounts WHERE status != 'deleted'", vec![])
+            .await
+            .unwrap()
+            .get_i64("n")
+            .unwrap();
+        assert_eq!(count, 1);
+        drop(pool);
+        cleanup_test_db(path);
+    }
+
+    #[tokio::test]
+    async fn insert_account_if_new_identity_allows_same_team_account_with_different_emails() {
+        let (pool, path) = test_pool("identity-team-email").await;
+        for email in ["one@example.test", "two@example.test"] {
+            let creds = Credentials {
+                refresh_token: format!("rt-{email}"),
+                access_token: format!("at-{email}"),
+                email: email.to_string(),
+                account_id: "shared-team-account".to_string(),
+                ..Default::default()
+            };
+            assert!(
+                insert_account_if_new_identity(&pool, email, &creds, "")
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+        }
+
+        let count = pool
+            .query_one("SELECT COUNT(*) AS n FROM accounts WHERE status != 'deleted'", vec![])
+            .await
+            .unwrap()
+            .get_i64("n")
+            .unwrap();
+        assert_eq!(count, 2);
+        drop(pool);
+        cleanup_test_db(path);
+    }
 }
