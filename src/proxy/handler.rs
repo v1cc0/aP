@@ -293,6 +293,7 @@ async fn proxy_request(
         let access_token = account.access_token.read().clone();
         let account_proxy = account.proxy_url.read().clone();
         let proxy_url = get_resolved_proxy(&state, account.db_id, &account_proxy);
+        let proxy_display = display_proxy_url(&proxy_url);
         let codex_account_id = account.codex_account_id.read().clone();
         let account_id_str = account.db_id.to_string();
 
@@ -353,6 +354,17 @@ async fn proxy_request(
         let device_profile = crate::proxy::useragent::DeviceProfile::from_config(&state.config, &account_id_str);
 
         let client = get_or_create_client(&state, &proxy_url);
+
+        info!(
+            endpoint,
+            upstream_url = %upstream_url,
+            proxy = %proxy_display,
+            account_id = account.db_id,
+            email = %account_email,
+            model = %model,
+            attempt = _attempt + 1,
+            "upstream connection resolved"
+        );
 
         let accept_header = if mode == ProxyMode::Compact {
             "application/json"
@@ -1817,6 +1829,23 @@ pub fn get_resolved_proxy(state: &AppState, account_id: i64, account_proxy: &str
     state.config.proxy_url.clone().unwrap_or_default()
 }
 
+fn display_proxy_url(proxy_url: &str) -> String {
+    if proxy_url.is_empty() {
+        return "direct".to_string();
+    }
+
+    let Some(at) = proxy_url.rfind('@') else {
+        return proxy_url.to_string();
+    };
+
+    let authority_start = proxy_url.find("://").map(|idx| idx + 3).unwrap_or(0);
+    if at <= authority_start {
+        return proxy_url.to_string();
+    }
+
+    format!("{}***:***@{}", &proxy_url[..authority_start], &proxy_url[at + 1..])
+}
+
 /// 重新从数据库加载启用的代理列表并刷新 AppState 内存缓存
 pub async fn refresh_enabled_proxies(state: &AppState) -> anyhow::Result<()> {
     let list = crate::db::queries::list_enabled_proxy_urls(&state.db()).await?;
@@ -1829,6 +1858,23 @@ pub async fn refresh_enabled_proxies(state: &AppState) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_proxy_url_masks_credentials() {
+        assert_eq!(display_proxy_url(""), "direct");
+        assert_eq!(
+            display_proxy_url("http://user:pass@127.0.0.1:8787"),
+            "http://***:***@127.0.0.1:8787"
+        );
+        assert_eq!(
+            display_proxy_url("socks5://token@proxy.internal:1080"),
+            "socks5://***:***@proxy.internal:1080"
+        );
+        assert_eq!(
+            display_proxy_url("http://127.0.0.1:8787"),
+            "http://127.0.0.1:8787"
+        );
+    }
 
     #[test]
     fn upstream_error_kind_basic() {
