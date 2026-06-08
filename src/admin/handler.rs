@@ -2425,17 +2425,20 @@ async fn import_json(
         return Json(json!({"error": "不是有效的 JSON 格式"})).into_response();
     }
 
-    // 按 token 类型分流：有 refresh_token 走 RT 导入，否则有 access_token 走 AT 导入
+    // 按 token 类型分流：JSON receipts usually carry both AT and RT, but RT
+    // refresh may be invalidated or rotated. Prefer AT when present so live
+    // receipt imports do not depend on RT refresh success; use RT only for
+    // RT-only payloads.
     let mut rt_tokens: Vec<String> = Vec::new();
     let mut at_tokens: Vec<String> = Vec::new();
 
     for e in all_entries {
         let rt = e.refresh_token.trim().to_string();
         let at = e.access_token.trim().to_string();
-        if !rt.is_empty() {
-            rt_tokens.push(rt);
-        } else if !at.is_empty() {
+        if !at.is_empty() {
             at_tokens.push(at);
+        } else if !rt.is_empty() {
+            rt_tokens.push(rt);
         }
     }
 
@@ -2443,7 +2446,7 @@ async fn import_json(
         return Json(json!({"error": "JSON 文件中未找到有效的 refresh_token 或 access_token"})).into_response();
     }
 
-    // 优先处理 RT（需要刷新验证），AT-only 直接导入
+    // AT is preferred per-entry above. RT is only used for RT-only entries.
     if !rt_tokens.is_empty() && at_tokens.is_empty() {
         // 全部是 RT
         import_rt_txt(state, rt_tokens.join("\n").into_bytes(), proxy_url).await
