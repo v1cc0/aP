@@ -10,7 +10,7 @@ mod token;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::extract::Path;
+use axum::extract::{DefaultBodyLimit, Path};
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
@@ -284,6 +284,7 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/backend-api/codex/responses/compact",
             post(proxy::handler::responses_compact),
         )
+        .layer(DefaultBodyLimit::max(proxy::MAX_REQUEST_BODY_SIZE))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             proxy::auth::require_api_key,
@@ -356,6 +357,82 @@ fn build_router(state: Arc<AppState>) -> Router {
         .merge(frontend)
         .layer(cors)
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    fn test_config() -> AppConfig {
+        AppConfig {
+            port: 0,
+            database_url: ":memory:".to_string(),
+            db_pool_size: 2,
+            db_begin_concurrent: false,
+            db_multiprocess_wal: false,
+            admin_secret: None,
+            proxy_url: None,
+            proxy_urls: Vec::new(),
+            allow_anonymous_v1: true,
+            device_user_agent: None,
+            device_package_version: None,
+            device_runtime_version: None,
+            device_os: None,
+            device_arch: None,
+            stabilize_device_profile: false,
+        }
+    }
+
+    async fn test_state() -> Arc<AppState> {
+        let config = test_config();
+        let db = db::init(
+            &config.database_url,
+            config.db_pool_size,
+            config.db_begin_concurrent,
+            config.db_multiprocess_wal,
+        )
+        .await
+        .expect("init test database");
+        let settings = db::queries::get_system_settings(&db)
+            .await
+            .expect("load test settings");
+        let scheduler = Scheduler::new(settings.max_concurrency as i64);
+        let rate_limiter = RateLimiter::new(settings.global_rpm as i64);
+        let (log_tx, _log_rx) = tokio::sync::mpsc::channel::<UsageLog>(1);
+
+        Arc::new(AppState::new(
+            config,
+            db,
+            scheduler,
+            rate_limiter,
+            log_tx,
+            settings,
+        ))
+    }
+
+    #[tokio::test]
+    async fn proxy_routes_accept_body_above_axum_default_limit() {
+        let app = build_router(test_state().await);
+        let body = vec![b' '; 3 * 1024 * 1024];
+        assert!(body.len() < proxy::MAX_REQUEST_BODY_SIZE);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 }
 
 // ─── 前端静态文件服务 ───
