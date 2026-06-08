@@ -2,8 +2,8 @@ pub mod health;
 pub mod scorer;
 pub mod selector;
 
-use std::sync::atomic::{AtomicI64, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, AtomicU8, AtomicU64, Ordering};
 use std::time::Instant;
 
 use chrono::{DateTime, Utc};
@@ -71,8 +71,8 @@ pub struct Account {
     pub usage_5h_pct_100: AtomicI64,
 
     // 上游用量重置时间（unix timestamp，0 = 无计划探针）
-    pub resets_at: AtomicI64,      // 7d 窗口重置时间
-    pub resets_5h_at: AtomicI64,   // 5h 窗口重置时间
+    pub resets_at: AtomicI64,    // 7d 窗口重置时间
+    pub resets_5h_at: AtomicI64, // 5h 窗口重置时间
 
     // 时间戳（unix）
     pub last_success_at: AtomicI64,
@@ -121,7 +121,10 @@ impl RecentWindow {
         if self.count == 0 {
             return 1.0;
         }
-        let successes = self.results[..self.count].iter().filter(|&&v| v == 1).count();
+        let successes = self.results[..self.count]
+            .iter()
+            .filter(|&&v| v == 1)
+            .count();
         successes as f64 / self.count as f64
     }
 }
@@ -284,7 +287,7 @@ pub struct Scheduler {
 
 /// 分桶结构 — 定期重建
 pub struct TierBuckets {
-    pub healthy: Vec<usize>,  // 指向 accounts 的索引
+    pub healthy: Vec<usize>, // 指向 accounts 的索引
     pub warm: Vec<usize>,
     pub risky: Vec<usize>,
     pub cursors: [AtomicU64; 3], // 每个桶的 round-robin 游标
@@ -316,7 +319,9 @@ impl Scheduler {
     /// 添加账号到调度器
     pub fn add_account(&self, account: Arc<Account>) {
         let max_c = self.max_concurrency.load(Ordering::Relaxed);
-        account.dynamic_concurrency_limit.store(max_c, Ordering::Relaxed);
+        account
+            .dynamic_concurrency_limit
+            .store(max_c, Ordering::Relaxed);
         self.accounts.write().push(account);
         self.rebuild_buckets();
     }
@@ -341,7 +346,8 @@ impl Scheduler {
         self.accounts.write().retain(|a| a.db_id != db_id);
 
         // 清理该账号的 session 绑定
-        self.session_affinity.retain(|_, (account_id, _)| *account_id != db_id);
+        self.session_affinity
+            .retain(|_, (account_id, _)| *account_id != db_id);
 
         self.rebuild_buckets();
     }

@@ -94,12 +94,7 @@ impl RateLimiter {
             }
             if self
                 .tokens_1000
-                .compare_exchange_weak(
-                    current,
-                    new_val,
-                    Ordering::AcqRel,
-                    Ordering::Relaxed,
-                )
+                .compare_exchange_weak(current, new_val, Ordering::AcqRel, Ordering::Relaxed)
                 .is_ok()
             {
                 break;

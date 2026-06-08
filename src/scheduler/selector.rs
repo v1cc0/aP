@@ -1,7 +1,7 @@
 use super::*;
 use std::collections::HashSet;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use crate::scheduler::scorer::Scorer;
@@ -35,10 +35,8 @@ impl Scheduler {
                     if let Some(acc) = self.get_account(account_id) {
                         if acc.is_available() && acc.try_acquire() {
                             // 更新最后使用时间
-                            self.session_affinity.insert(
-                                session_id.to_string(),
-                                (account_id, Instant::now())
-                            );
+                            self.session_affinity
+                                .insert(session_id.to_string(), (account_id, Instant::now()));
                             return Some(acc);
                         }
                     }
@@ -51,10 +49,8 @@ impl Scheduler {
 
         // 3. 建立 session 绑定
         if !session_id.is_empty() {
-            self.session_affinity.insert(
-                session_id.to_string(),
-                (account.db_id, Instant::now())
-            );
+            self.session_affinity
+                .insert(session_id.to_string(), (account.db_id, Instant::now()));
         }
 
         Some(account)

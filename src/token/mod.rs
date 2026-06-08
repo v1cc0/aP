@@ -38,8 +38,8 @@ pub fn parse_id_token(id_token: &str) -> Option<AccountInfo> {
     }
 
     // JWT payload 是 base64url 编码
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     let payload = URL_SAFE_NO_PAD.decode(parts[1]).ok()?;
     let json: serde_json::Value = serde_json::from_slice(&payload).ok()?;
 
@@ -62,9 +62,6 @@ pub fn parse_id_token(id_token: &str) -> Option<AccountInfo> {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        expires_at: json
-            .get("exp")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0),
+        expires_at: json.get("exp").and_then(|v| v.as_i64()).unwrap_or(0),
     })
 }

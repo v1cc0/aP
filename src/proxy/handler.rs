@@ -94,7 +94,15 @@ pub async fn responses(
     if let Some(resp) = validate_responses_body(&body, false) {
         return resp;
     }
-    proxy_request(state, headers, body, "/v1/responses", false, ProxyMode::Stream).await
+    proxy_request(
+        state,
+        headers,
+        body,
+        "/v1/responses",
+        false,
+        ProxyMode::Stream,
+    )
+    .await
 }
 
 /// POST /v1/responses/compact
@@ -202,10 +210,17 @@ pub async fn list_models() -> impl IntoResponse {
 
     let data: Vec<ModelEntry> = super::SUPPORTED_MODELS
         .iter()
-        .map(|m| ModelEntry { id: m, object: "model", owned_by: "openai" })
+        .map(|m| ModelEntry {
+            id: m,
+            object: "model",
+            owned_by: "openai",
+        })
         .collect();
 
-    axum::Json(ModelList { object: "list", data })
+    axum::Json(ModelList {
+        object: "list",
+        data,
+    })
 }
 
 /// 核心代理逻辑
@@ -265,11 +280,7 @@ async fn proxy_request(
     let session_hint = body_json
         .get("session_id")
         .and_then(|v| v.as_str())
-        .or_else(|| {
-            headers
-                .get("x-session-id")
-                .and_then(|v| v.to_str().ok())
-        })
+        .or_else(|| headers.get("x-session-id").and_then(|v| v.to_str().ok()))
         .unwrap_or("")
         .to_string();
 
@@ -282,10 +293,7 @@ async fn proxy_request(
         {
             Some(acc) => acc,
             None => {
-                return error_response(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "无可用账号，请稍后重试",
-                );
+                return error_response(StatusCode::SERVICE_UNAVAILABLE, "无可用账号，请稍后重试");
             }
         };
 
@@ -319,7 +327,8 @@ async fn proxy_request(
         // ── 构建 HTTP 请求 ──
 
         let upstream_url = format!("{}{}", super::UPSTREAM_BASE, mode.upstream_path());
-        let device_profile = crate::proxy::useragent::DeviceProfile::from_config(&state.config, &account_id_str);
+        let device_profile =
+            crate::proxy::useragent::DeviceProfile::from_config(&state.config, &account_id_str);
 
         let client = get_or_create_client(&state, &proxy_url);
 
@@ -350,8 +359,14 @@ async fn proxy_request(
             .header("Version", &device_profile.package_version)
             .header("Originator", super::ORIGINATOR)
             .header("Connection", "Keep-Alive")
-            .header("X-Stainless-Package-Version", &device_profile.package_version)
-            .header("X-Stainless-Runtime-Version", &device_profile.runtime_version)
+            .header(
+                "X-Stainless-Package-Version",
+                &device_profile.package_version,
+            )
+            .header(
+                "X-Stainless-Runtime-Version",
+                &device_profile.runtime_version,
+            )
             .header("X-Stainless-Os", &device_profile.os)
             .header("X-Stainless-Arch", &device_profile.arch)
             .json(&upstream_body)
@@ -517,11 +532,27 @@ async fn proxy_request(
 
                 // 记录错误请求日志（直接 send 到 log channel，无需 spawn）
                 send_usage_log(
-                    &state, account.db_id, endpoint, &model,
-                    status_u16 as i64, duration, is_stream, &account_email,
-                    &UsageInfo { input_tokens: 0, output_tokens: 0, reasoning_tokens: 0, cached_tokens: 0, total_tokens: 0 },
-                    0, &reasoning_effort, "", &tt_context,
-                ).await;
+                    &state,
+                    account.db_id,
+                    endpoint,
+                    &model,
+                    status_u16 as i64,
+                    duration,
+                    is_stream,
+                    &account_email,
+                    &UsageInfo {
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        reasoning_tokens: 0,
+                        cached_tokens: 0,
+                        total_tokens: 0,
+                    },
+                    0,
+                    &reasoning_effort,
+                    "",
+                    &tt_context,
+                )
+                .await;
 
                 let err_kind = &upstream_kind;
                 match status_u16 {
@@ -536,7 +567,9 @@ async fn proxy_request(
                         }
                         account.report_failure(FailureType::Unauthorized);
                         // 检查是否开启自动清理 401 账号
-                        let auto_clean = state.db_settings_cache.read()
+                        let auto_clean = state
+                            .db_settings_cache
+                            .read()
                             .map(|s| s.auto_clean_unauthorized)
                             .unwrap_or(false);
                         if auto_clean {
@@ -552,7 +585,13 @@ async fn proxy_request(
                             let db = state.db();
                             let aid = account.db_id;
                             tokio::spawn(async move {
-                                let _ = crate::db::queries::update_account_cooldown(&db, aid, chrono::Utc::now().timestamp() + 5 * 60, "banned_401").await;
+                                let _ = crate::db::queries::update_account_cooldown(
+                                    &db,
+                                    aid,
+                                    chrono::Utc::now().timestamp() + 5 * 60,
+                                    "banned_401",
+                                )
+                                .await;
                             });
                             warn!(account_id = account.db_id, kind = %err_kind, "账号 401 banned");
                         }
@@ -563,9 +602,11 @@ async fn proxy_request(
                         // 工作区停用（deactivated_workspace）→ 长冷却 24h；其他 4xx 不重试直接透传
                         if is_deactivated_workspace_error(&error_body) {
                             account.report_failure(FailureType::Other);
-                            state
-                                .scheduler
-                                .mark_cooldown(&account, "deactivated_workspace", 24 * 3600);
+                            state.scheduler.mark_cooldown(
+                                &account,
+                                "deactivated_workspace",
+                                24 * 3600,
+                            );
                             let db = state.db();
                             let aid = account.db_id;
                             let until = chrono::Utc::now().timestamp() + 24 * 3600;
@@ -587,7 +628,9 @@ async fn proxy_request(
                         }
                         // 其他 402/403（payment_required/forbidden）短冷却 30min 但不在本次重试
                         account.report_failure(FailureType::Other);
-                        state.scheduler.mark_cooldown(&account, "payment_required", 30 * 60);
+                        state
+                            .scheduler
+                            .mark_cooldown(&account, "payment_required", 30 * 60);
                         state.scheduler.recompute_health(&account);
                         return error_response(status, &error_body);
                     }
@@ -598,19 +641,33 @@ async fn proxy_request(
                         // 首次 429 时记录 resets_at（上游用量重置时间）
                         if account.resets_at.load(std::sync::atomic::Ordering::Relaxed) == 0 {
                             if let Ok(body_json) = serde_json::from_str::<Value>(&error_body) {
-                                if let Some(ts) = body_json.pointer("/error/resets_at").and_then(|v| v.as_i64()) {
-                                    account.resets_at.store(ts, std::sync::atomic::Ordering::Relaxed);
+                                if let Some(ts) = body_json
+                                    .pointer("/error/resets_at")
+                                    .and_then(|v| v.as_i64())
+                                {
+                                    account
+                                        .resets_at
+                                        .store(ts, std::sync::atomic::Ordering::Relaxed);
                                     // 异步持久化到数据库
                                     let db = state.db();
                                     let aid = account.db_id;
                                     tokio::spawn(async move {
-                                        let _ = crate::db::queries::update_account_resets_at(&db, aid, ts).await;
+                                        let _ = crate::db::queries::update_account_resets_at(
+                                            &db, aid, ts,
+                                        )
+                                        .await;
                                     });
-                                    info!(account_id = account.db_id, resets_at = ts, "记录用量重置时间");
+                                    info!(
+                                        account_id = account.db_id,
+                                        resets_at = ts,
+                                        "记录用量重置时间"
+                                    );
                                 }
                             }
                         }
-                        let auto_clean = state.db_settings_cache.read()
+                        let auto_clean = state
+                            .db_settings_cache
+                            .read()
                             .map(|s| s.auto_clean_rate_limited)
                             .unwrap_or(false);
                         if auto_clean {
@@ -631,7 +688,13 @@ async fn proxy_request(
                             let aid = account.db_id;
                             let until = chrono::Utc::now().timestamp() + cooldown;
                             tokio::spawn(async move {
-                                let _ = crate::db::queries::update_account_cooldown(&db, aid, until, "rate_limited").await;
+                                let _ = crate::db::queries::update_account_cooldown(
+                                    &db,
+                                    aid,
+                                    until,
+                                    "rate_limited",
+                                )
+                                .await;
                             });
                             warn!(account_id = account.db_id, cooldown, "账号 429");
                         }
@@ -674,11 +737,27 @@ async fn proxy_request(
                 // 记录网络/超时错误日志（直接 send，无需 spawn）
                 let duration = request_start.elapsed().as_millis() as i64;
                 send_usage_log(
-                    &state, account.db_id, endpoint, &model,
-                    499, duration, is_stream, &account_email,
-                    &UsageInfo { input_tokens: 0, output_tokens: 0, reasoning_tokens: 0, cached_tokens: 0, total_tokens: 0 },
-                    0, &reasoning_effort, "", &tt_context,
-                ).await;
+                    &state,
+                    account.db_id,
+                    endpoint,
+                    &model,
+                    499,
+                    duration,
+                    is_stream,
+                    &account_email,
+                    &UsageInfo {
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        reasoning_tokens: 0,
+                        cached_tokens: 0,
+                        total_tokens: 0,
+                    },
+                    0,
+                    &reasoning_effort,
+                    "",
+                    &tt_context,
+                )
+                .await;
 
                 if e.is_timeout() {
                     warn!(account_id = account.db_id, "超时");
@@ -826,7 +905,12 @@ async fn stream_response_with_tracking(
         };
 
         // 发送第一个 chunk（TTFT 从此刻更准确）
-        match process_chunk(&mut translator, &first_chunk, translate, &mut first_token_time) {
+        match process_chunk(
+            &mut translator,
+            &first_chunk,
+            translate,
+            &mut first_token_time,
+        ) {
             Ok(translated) => {
                 if !translated.is_empty() {
                     if tx.send(Ok(Bytes::from(translated))).await.is_err() {
@@ -915,7 +999,10 @@ async fn stream_response_with_tracking(
 
         let (usage, log_status) = if client_gone {
             // 客户端断连 → 499
-            let u = translator.usage.clone().unwrap_or_else(|| translator.estimate_tokens_on_break());
+            let u = translator
+                .usage
+                .clone()
+                .unwrap_or_else(|| translator.estimate_tokens_on_break());
             (u, 499)
         } else if translator.failed {
             // 上游显式 response.failed → 用 payload 中的 status_code 取代默认 200
@@ -924,7 +1011,10 @@ async fn stream_response_with_tracking(
                 .classify_failure()
                 .map(|(code, _kind, _msg)| code)
                 .unwrap_or(500);
-            let u = translator.usage.clone().unwrap_or_else(|| translator.estimate_tokens_on_break());
+            let u = translator
+                .usage
+                .clone()
+                .unwrap_or_else(|| translator.estimate_tokens_on_break());
             (u, status)
         } else if translator.completed && translator.usage.is_some() {
             // 完整完成 → 200
@@ -946,9 +1036,19 @@ async fn stream_response_with_tracking(
             warn!("断流且无 token 数据，跳过 usage 记录");
         } else {
             send_usage_log(
-                &state, account_id, &endpoint, &model,
-                log_status as i64, duration, true, &email,
-                &usage, first_token_ms, &effort, &service_tier, &tt_context,
+                &state,
+                account_id,
+                &endpoint,
+                &model,
+                log_status as i64,
+                duration,
+                true,
+                &email,
+                &usage,
+                first_token_ms,
+                &effort,
+                &service_tier,
+                &tt_context,
             )
             .await;
         }
@@ -984,10 +1084,7 @@ async fn collect_compact_response(
         Ok(b) => b,
         Err(e) => {
             warn!(account_id, error = %e, "compact 读取上游响应体失败");
-            return error_response(
-                StatusCode::BAD_GATEWAY,
-                &format!("读取上游响应失败: {}", e),
-            );
+            return error_response(StatusCode::BAD_GATEWAY, &format!("读取上游响应失败: {}", e));
         }
     };
 
@@ -1028,7 +1125,11 @@ async fn collect_compact_response(
 
     let service_tier = serde_json::from_slice::<Value>(&body_bytes)
         .ok()
-        .and_then(|v| v.get("service_tier").and_then(|x| x.as_str()).map(String::from))
+        .and_then(|v| {
+            v.get("service_tier")
+                .and_then(|x| x.as_str())
+                .map(String::from)
+        })
         .unwrap_or_default();
 
     let endpoint = endpoint.to_string();
@@ -1105,7 +1206,10 @@ async fn collect_sync_response(
         .unwrap_or(0);
     let duration = request_start.elapsed().as_millis() as i64;
 
-    let usage = translator.usage.clone().unwrap_or_else(|| translator.estimate_tokens_on_break());
+    let usage = translator
+        .usage
+        .clone()
+        .unwrap_or_else(|| translator.estimate_tokens_on_break());
     let service_tier = translator.service_tier.clone();
 
     // 移植自 codex2api 提交 285f209：sync 模式下若上游 response.failed，按真实状态码记录
@@ -1133,10 +1237,21 @@ async fn collect_sync_response(
         let usage = usage.clone();
         async move {
             send_usage_log(
-                &state, account_id, &endpoint, &model,
-                log_status, duration, false, &email,
-                &usage, first_token_ms, &effort, &service_tier, &tt_context,
-            ).await;
+                &state,
+                account_id,
+                &endpoint,
+                &model,
+                log_status,
+                duration,
+                false,
+                &email,
+                &usage,
+                first_token_ms,
+                &effort,
+                &service_tier,
+                &tt_context,
+            )
+            .await;
         }
     });
 
@@ -1170,7 +1285,11 @@ fn build_sync_response_body(raw_sse: &[u8], translate: bool) -> anyhow::Result<V
             Ok(event) => event,
             Err(_) => continue,
         };
-        match event.get("type").and_then(|value| value.as_str()).unwrap_or("") {
+        match event
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+        {
             "response.output_text.delta" => {
                 if let Some(delta) = event.get("delta").and_then(|value| value.as_str()) {
                     output_text.push_str(delta);
@@ -1233,8 +1352,8 @@ pub(crate) fn get_or_create_client(state: &AppState, account_proxy: &str) -> req
 
     // 创建新 Client，优化连接池参数
     let mut builder = reqwest::Client::builder()
-        .pool_max_idle_per_host(50)  // 20 → 50，提升连接复用率
-        .pool_idle_timeout(Duration::from_secs(600))  // 300 → 600，保持连接更久
+        .pool_max_idle_per_host(50) // 20 → 50，提升连接复用率
+        .pool_idle_timeout(Duration::from_secs(600)) // 300 → 600，保持连接更久
         .connect_timeout(Duration::from_secs(10))
         .tcp_keepalive(Duration::from_secs(60))
         .tcp_nodelay(true);
@@ -1334,9 +1453,13 @@ pub(crate) fn parse_rate_limit_cooldown(
         .unwrap_or(10080.0); // 默认 7d
 
     let window_to_cooldown = |min: f64| -> i64 {
-        if min >= 1440.0 { 7 * 24 * 3600 }
-        else if min >= 60.0 { 5 * 3600 }
-        else { 1800 }
+        if min >= 1440.0 {
+            7 * 24 * 3600
+        } else if min >= 60.0 {
+            5 * 3600
+        } else {
+            1800
+        }
     };
 
     if primary >= 100.0 && secondary >= 100.0 {
@@ -1375,7 +1498,10 @@ fn resolve_session_id(body: &Value, downstream_headers: &HeaderMap, account_id: 
     }
 
     // 2. 下游 Authorization header 中的 API Key（client_principal）
-    if let Some(auth) = downstream_headers.get("Authorization").and_then(|v| v.to_str().ok()) {
+    if let Some(auth) = downstream_headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+    {
         let api_key = auth.strip_prefix("Bearer ").unwrap_or(auth).trim();
         if !api_key.is_empty() {
             let seed = format!("codex2api:prompt-cache:{}", api_key);
@@ -1396,7 +1522,8 @@ fn resolve_session_id(body: &Value, downstream_headers: &HeaderMap, account_id: 
 /// - `x-codex-{primary,secondary}-reset-after-seconds` — 重置剩余秒数
 pub(crate) fn update_usage_from_headers(account: &crate::scheduler::Account, headers: &HeaderMap) {
     let parse_hdr = |name: &str| -> Option<f64> {
-        headers.get(name)
+        headers
+            .get(name)
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse::<f64>().ok())
     };
@@ -1441,16 +1568,14 @@ pub(crate) fn update_usage_from_headers(account: &crate::scheduler::Account, hea
     };
 
     if let Some(pct) = pct_5h {
-        account.usage_5h_pct_100.store(
-            (pct * 100.0) as i64,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        account
+            .usage_5h_pct_100
+            .store((pct * 100.0) as i64, std::sync::atomic::Ordering::Relaxed);
     }
     if let Some(pct) = pct_7d {
-        account.usage_7d_pct_100.store(
-            (pct * 100.0) as i64,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        account
+            .usage_7d_pct_100
+            .store((pct * 100.0) as i64, std::sync::atomic::Ordering::Relaxed);
     }
 
     // 同时从 reset-after-seconds 更新 resets_at（7d）和 resets_5h_at（5h）
@@ -1486,13 +1611,17 @@ pub(crate) fn update_usage_from_headers(account: &crate::scheduler::Account, hea
     let now = chrono::Utc::now().timestamp();
     if let Some(sec) = reset_5h_sec {
         if sec > 0.0 {
-            account.resets_5h_at.store(now + sec as i64, std::sync::atomic::Ordering::Relaxed);
+            account
+                .resets_5h_at
+                .store(now + sec as i64, std::sync::atomic::Ordering::Relaxed);
         }
     }
     if let Some(sec) = reset_7d_sec {
         if sec > 0.0 {
             let ts = now + sec as i64;
-            account.resets_at.store(ts, std::sync::atomic::Ordering::Relaxed);
+            account
+                .resets_at
+                .store(ts, std::sync::atomic::Ordering::Relaxed);
         }
     }
 }
@@ -1740,7 +1869,10 @@ fn final_usage_limit_response(details: &UsageLimitDetails) -> Response {
 
     let mut err_obj = serde_json::Map::new();
     err_obj.insert("message".to_string(), Value::String(message));
-    err_obj.insert("type".to_string(), Value::String("server_error".to_string()));
+    err_obj.insert(
+        "type".to_string(),
+        Value::String("server_error".to_string()),
+    );
     err_obj.insert(
         "code".to_string(),
         Value::String("account_pool_usage_limit_reached".to_string()),
@@ -1848,7 +1980,11 @@ fn display_proxy_url(proxy_url: &str) -> String {
         return proxy_url.to_string();
     }
 
-    format!("{}***:***@{}", &proxy_url[..authority_start], &proxy_url[at + 1..])
+    format!(
+        "{}***:***@{}",
+        &proxy_url[..authority_start],
+        &proxy_url[at + 1..]
+    )
 }
 
 /// 重新从数据库加载启用的代理列表并刷新 AppState 内存缓存

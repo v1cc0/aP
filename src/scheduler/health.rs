@@ -77,7 +77,9 @@ impl Scheduler {
         let now = chrono::Utc::now().timestamp();
         account.last_unauthorized_at.store(now, Ordering::Relaxed);
         account.health_tier.store(TIER_BANNED, Ordering::Relaxed);
-        account.dynamic_concurrency_limit.store(0, Ordering::Relaxed);
+        account
+            .dynamic_concurrency_limit
+            .store(0, Ordering::Relaxed);
 
         // 冷却 5 分钟（对齐 codex2api Go proxy/handler.go:2835
         //  MarkCooldown(account, 5*time.Minute, "unauthorized")）

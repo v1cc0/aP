@@ -1,14 +1,11 @@
 use super::*;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use reqwest::Client;
 use std::time::Duration;
 use tracing::warn;
 
 /// 刷新 Access Token
-pub async fn refresh_access_token(
-    client: &Client,
-    refresh_token: &str,
-) -> Result<TokenResponse> {
+pub async fn refresh_access_token(client: &Client, refresh_token: &str) -> Result<TokenResponse> {
     let rt = refresh_token.trim();
     if rt.is_empty() {
         bail!("non_retryable: refresh_token 为空");
@@ -46,10 +43,7 @@ pub async fn refresh_access_token(
 }
 
 /// 带重试的刷新（最多 3 次，指数退避）
-pub async fn refresh_with_retry(
-    client: &Client,
-    refresh_token: &str,
-) -> Result<TokenResponse> {
+pub async fn refresh_with_retry(client: &Client, refresh_token: &str) -> Result<TokenResponse> {
     let rt = refresh_token.trim();
     if rt.is_empty() {
         bail!("non_retryable: refresh_token 为空，跳过刷新");

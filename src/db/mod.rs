@@ -21,12 +21,20 @@ impl DbPool {
         Ok(self.db.connect()?)
     }
 
-    pub fn size(&self) -> u32 { 1 }
-    pub fn num_idle(&self) -> usize { self.permits.available_permits() }
+    pub fn size(&self) -> u32 {
+        1
+    }
+    pub fn num_idle(&self) -> usize {
+        self.permits.available_permits()
+    }
     #[allow(dead_code)]
-    pub fn max_connections(&self) -> u32 { self.max_connections }
+    pub fn max_connections(&self) -> u32 {
+        self.max_connections
+    }
     #[allow(dead_code)]
-    pub fn begin_concurrent(&self) -> bool { self.begin_concurrent }
+    pub fn begin_concurrent(&self) -> bool {
+        self.begin_concurrent
+    }
 
     pub async fn close(&self) {}
 
@@ -41,8 +49,11 @@ impl DbPool {
             self.transaction_write(|conn| {
                 let sql = sql.to_string();
                 let params = params.clone();
-                Box::pin(async move { Ok(conn.execute(&sql, turso::params_from_iter(params)).await?) })
-            }).await
+                Box::pin(
+                    async move { Ok(conn.execute(&sql, turso::params_from_iter(params)).await?) },
+                )
+            })
+            .await
         } else {
             self.execute(sql, params).await
         }
@@ -55,7 +66,11 @@ impl DbPool {
     {
         let _permit = self.permits.acquire().await?;
         let conn = self.conn().await?;
-        let begin = if self.begin_concurrent { "BEGIN CONCURRENT" } else { "BEGIN IMMEDIATE" };
+        let begin = if self.begin_concurrent {
+            "BEGIN CONCURRENT"
+        } else {
+            "BEGIN IMMEDIATE"
+        };
         conn.execute(begin, ()).await?;
         match f(&conn).await {
             Ok(v) => {
@@ -80,26 +95,43 @@ impl DbPool {
     }
 
     pub async fn query_one(&self, sql: &str, params: Vec<turso::Value>) -> Result<DbRow> {
-        self.query_all(sql, params).await?.into_iter().next().context("query returned no rows")
+        self.query_all(sql, params)
+            .await?
+            .into_iter()
+            .next()
+            .context("query returned no rows")
     }
 
-    pub async fn query_all_write(&self, sql: &str, params: Vec<turso::Value>) -> Result<Vec<DbRow>> {
+    pub async fn query_all_write(
+        &self,
+        sql: &str,
+        params: Vec<turso::Value>,
+    ) -> Result<Vec<DbRow>> {
         if self.begin_concurrent {
             self.transaction_write(|conn| {
                 let sql = sql.to_string();
                 let params = params.clone();
                 Box::pin(async move { query_all_on(conn, &sql, params).await })
-            }).await
+            })
+            .await
         } else {
             self.query_all(sql, params).await
         }
     }
 
     pub async fn query_one_write(&self, sql: &str, params: Vec<turso::Value>) -> Result<DbRow> {
-        self.query_all_write(sql, params).await?.into_iter().next().context("query returned no rows")
+        self.query_all_write(sql, params)
+            .await?
+            .into_iter()
+            .next()
+            .context("query returned no rows")
     }
 
-    pub async fn query_optional(&self, sql: &str, params: Vec<turso::Value>) -> Result<Option<DbRow>> {
+    pub async fn query_optional(
+        &self,
+        sql: &str,
+        params: Vec<turso::Value>,
+    ) -> Result<Option<DbRow>> {
         Ok(self.query_all(sql, params).await?.into_iter().next())
     }
 }
@@ -121,7 +153,9 @@ impl DbRow {
         }
     }
 
-    pub fn get_i32(&self, name: &str) -> Result<i32> { Ok(self.get_i64(name)? as i32) }
+    pub fn get_i32(&self, name: &str) -> Result<i32> {
+        Ok(self.get_i64(name)? as i32)
+    }
     pub fn get_f64(&self, name: &str) -> Result<f64> {
         match self.value(name)? {
             turso::Value::Integer(v) => Ok(*v as f64),
@@ -131,7 +165,9 @@ impl DbRow {
             v => anyhow::bail!("cannot convert {v:?} to f64 for {name}"),
         }
     }
-    pub fn get_bool(&self, name: &str) -> Result<bool> { Ok(self.get_i64(name)? != 0) }
+    pub fn get_bool(&self, name: &str) -> Result<bool> {
+        Ok(self.get_i64(name)? != 0)
+    }
     pub fn get_string(&self, name: &str) -> Result<String> {
         match self.value(name)? {
             turso::Value::Text(v) => Ok(v.clone()),
@@ -148,19 +184,39 @@ impl DbRow {
         }
     }
     fn value(&self, name: &str) -> Result<&turso::Value> {
-        let idx = self.columns.iter().position(|c| c == name).with_context(|| format!("missing column {name}"))?;
+        let idx = self
+            .columns
+            .iter()
+            .position(|c| c == name)
+            .with_context(|| format!("missing column {name}"))?;
         Ok(&self.values[idx])
     }
 }
 
-pub(crate) fn v_str(s: &str) -> turso::Value { turso::Value::Text(s.to_string()) }
-pub(crate) fn v_string(s: String) -> turso::Value { turso::Value::Text(s) }
-pub(crate) fn v_i64(v: i64) -> turso::Value { turso::Value::Integer(v) }
-pub(crate) fn v_i32(v: i32) -> turso::Value { turso::Value::Integer(v as i64) }
-pub(crate) fn v_f64(v: f64) -> turso::Value { turso::Value::Real(v) }
-pub(crate) fn v_bool(v: bool) -> turso::Value { turso::Value::Integer(if v { 1 } else { 0 }) }
+pub(crate) fn v_str(s: &str) -> turso::Value {
+    turso::Value::Text(s.to_string())
+}
+pub(crate) fn v_string(s: String) -> turso::Value {
+    turso::Value::Text(s)
+}
+pub(crate) fn v_i64(v: i64) -> turso::Value {
+    turso::Value::Integer(v)
+}
+pub(crate) fn v_i32(v: i32) -> turso::Value {
+    turso::Value::Integer(v as i64)
+}
+pub(crate) fn v_f64(v: f64) -> turso::Value {
+    turso::Value::Real(v)
+}
+pub(crate) fn v_bool(v: bool) -> turso::Value {
+    turso::Value::Integer(if v { 1 } else { 0 })
+}
 
-async fn query_all_on(conn: &turso::Connection, sql: &str, params: Vec<turso::Value>) -> Result<Vec<DbRow>> {
+async fn query_all_on(
+    conn: &turso::Connection,
+    sql: &str,
+    params: Vec<turso::Value>,
+) -> Result<Vec<DbRow>> {
     let mut rows = conn.query(sql, turso::params_from_iter(params)).await?;
     let columns = rows.column_names();
     let mut out = Vec::new();
@@ -169,13 +225,21 @@ async fn query_all_on(conn: &turso::Connection, sql: &str, params: Vec<turso::Va
         for i in 0..row.column_count() {
             values.push(row.get_value(i)?);
         }
-        out.push(DbRow { columns: columns.clone(), values });
+        out.push(DbRow {
+            columns: columns.clone(),
+            values,
+        });
     }
     Ok(out)
 }
 
 /// 初始化 Turso 数据库并建表。
-pub async fn init(database_path: &str, pool_size: u32, begin_concurrent: bool, multiprocess_wal: bool) -> Result<DbPool> {
+pub async fn init(
+    database_path: &str,
+    pool_size: u32,
+    begin_concurrent: bool,
+    multiprocess_wal: bool,
+) -> Result<DbPool> {
     if database_path != ":memory:" {
         if let Some(parent) = Path::new(database_path).parent() {
             if !parent.as_os_str().is_empty() {
@@ -250,7 +314,9 @@ async fn create_tables(pool: &DbPool) -> Result<()> {
             test_latency_ms INTEGER NOT NULL DEFAULT 0
         )",
     ];
-    for sql in statements { pool.execute(sql, vec![]).await?; }
+    for sql in statements {
+        pool.execute(sql, vec![]).await?;
+    }
     for sql in [
         "ALTER TABLE accounts ADD COLUMN enable_scheduling INTEGER NOT NULL DEFAULT 1",
         "ALTER TABLE usage_logs ADD COLUMN cost REAL NOT NULL DEFAULT 0",
@@ -262,7 +328,13 @@ async fn create_tables(pool: &DbPool) -> Result<()> {
         "ALTER TABLE usage_logs ADD COLUMN tt_provider_platform TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE system_settings ADD COLUMN pg_max_conns INTEGER NOT NULL DEFAULT 256",
         "ALTER TABLE system_settings ADD COLUMN proxy_pool_enabled INTEGER NOT NULL DEFAULT 0",
-    ] { let _ = pool.execute(sql, vec![]).await; }
-    pool.execute("UPDATE system_settings SET pg_max_conns = 256 WHERE id = 1 AND pg_max_conns = 20", vec![]).await?;
+    ] {
+        let _ = pool.execute(sql, vec![]).await;
+    }
+    pool.execute(
+        "UPDATE system_settings SET pg_max_conns = 256 WHERE id = 1 AND pg_max_conns = 20",
+        vec![],
+    )
+    .await?;
     Ok(())
 }

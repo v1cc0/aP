@@ -46,7 +46,9 @@ pub struct Credentials {
     pub codex_5h_reset_at: String,
 }
 
-fn is_zero_f64(v: &f64) -> bool { *v == 0.0 }
+fn is_zero_f64(v: &f64) -> bool {
+    *v == 0.0
+}
 
 // ─── 使用日志 ───
 
@@ -143,7 +145,9 @@ pub struct SystemSettings {
     pub proxy_pool_enabled: bool,
 }
 
-fn default_pg_max_conns() -> i32 { 256 }
+fn default_pg_max_conns() -> i32 {
+    256
+}
 
 // ─── 代理池模型 ───
 
@@ -172,7 +176,6 @@ pub struct ProxyTestResult {
     pub location: Option<String>,
     pub error: Option<String>,
 }
-
 
 // ─── 图表聚合数据 ───
 

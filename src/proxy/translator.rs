@@ -1,15 +1,29 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 // ─── Codex 不支持的字段（传了会 400）───
 
 const UNSUPPORTED_FIELDS: &[&str] = &[
-    "temperature", "top_p", "frequency_penalty", "presence_penalty",
-    "logprobs", "top_logprobs", "n", "seed", "stop", "user",
-    "logit_bias", "response_format", "stream_options",
-    "truncation", "context_management",
-    "max_output_tokens", "max_tokens", "max_completion_tokens",
-    "metadata", "verbosity",
+    "temperature",
+    "top_p",
+    "frequency_penalty",
+    "presence_penalty",
+    "logprobs",
+    "top_logprobs",
+    "n",
+    "seed",
+    "stop",
+    "user",
+    "logit_bias",
+    "response_format",
+    "stream_options",
+    "truncation",
+    "context_management",
+    "max_output_tokens",
+    "max_tokens",
+    "max_completion_tokens",
+    "metadata",
+    "verbosity",
 ];
 
 /// 上游接受的最大工具数量（对齐 Go maxTools）
@@ -21,10 +35,20 @@ const MAX_TOOLS: usize = 128;
 // 保留 allOf/anyOf/oneOf/$ref/$defs/additionalProperties 等结构化关键字，
 // 但会递归进入其中清理。
 const UNSUPPORTED_SCHEMA_KEYS: &[&str] = &[
-    "uniqueItems", "minItems", "maxItems", "minimum", "maximum",
-    "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
-    "pattern", "minLength", "maxLength", "format",
-    "minProperties", "maxProperties",
+    "uniqueItems",
+    "minItems",
+    "maxItems",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "multipleOf",
+    "pattern",
+    "minLength",
+    "maxLength",
+    "format",
+    "minProperties",
+    "maxProperties",
 ];
 
 // ─── 输出侧类型化结构体（零堆分配序列化）───
@@ -361,7 +385,11 @@ fn raw_content_to_string(content: Option<&Value>) -> String {
 /// 构造 Codex content parts：根据 role 选 input_text / output_text
 /// 跳过图片等非文本类型（按 scope 要求）。但允许已经规范化的 input_text/output_text 透传。
 fn build_content_parts(content: Option<&Value>, role: &str) -> Value {
-    let text_type = if role == "assistant" { "output_text" } else { "input_text" };
+    let text_type = if role == "assistant" {
+        "output_text"
+    } else {
+        "input_text"
+    };
 
     match content {
         None | Some(Value::Null) => Value::Array(Vec::new()),
@@ -486,7 +514,10 @@ fn sanitize_tools(tools: &[Value]) -> Vec<Value> {
 fn normalize_function_tool_parameters(tool: &mut serde_json::Map<String, Value>) {
     let need_default = !matches!(tool.get("parameters"), Some(Value::Object(_)));
     if need_default {
-        tool.insert("parameters".to_string(), default_function_parameters_schema());
+        tool.insert(
+            "parameters".to_string(),
+            default_function_parameters_schema(),
+        );
         return;
     }
     if let Some(params) = tool.get_mut("parameters") {
@@ -643,7 +674,10 @@ fn ensure_function_parameters_root_object(schema: &mut Value) {
         }
         let need_props = !matches!(obj.get("properties"), Some(Value::Object(_)));
         if need_props {
-            obj.insert("properties".to_string(), Value::Object(serde_json::Map::new()));
+            obj.insert(
+                "properties".to_string(),
+                Value::Object(serde_json::Map::new()),
+            );
         }
     }
 }
@@ -684,8 +718,14 @@ pub struct UsageInfo {
 #[allow(dead_code)]
 pub fn extract_usage(resp: &Value) -> UsageInfo {
     let usage = resp.get("usage").unwrap_or(&Value::Null);
-    let input = usage.get("input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
-    let output = usage.get("output_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+    let input = usage
+        .get("input_tokens")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let output = usage
+        .get("output_tokens")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
 
     let reasoning = usage
         .get("output_tokens_details")
@@ -714,10 +754,16 @@ fn extract_usage_from_raw(raw: &Option<UsageRaw>) -> UsageInfo {
         Some(u) => {
             let input = u.input_tokens.unwrap_or(0);
             let output = u.output_tokens.unwrap_or(0);
-            let reasoning = u.output_tokens_details.as_ref()
-                .and_then(|d| d.reasoning_tokens).unwrap_or(0);
-            let cached = u.input_tokens_details.as_ref()
-                .and_then(|d| d.cached_tokens).unwrap_or(0);
+            let reasoning = u
+                .output_tokens_details
+                .as_ref()
+                .and_then(|d| d.reasoning_tokens)
+                .unwrap_or(0);
+            let cached = u
+                .input_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens)
+                .unwrap_or(0);
             UsageInfo {
                 input_tokens: input,
                 output_tokens: output,
@@ -727,8 +773,11 @@ fn extract_usage_from_raw(raw: &Option<UsageRaw>) -> UsageInfo {
             }
         }
         None => UsageInfo {
-            input_tokens: 0, output_tokens: 0, reasoning_tokens: 0,
-            cached_tokens: 0, total_tokens: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            reasoning_tokens: 0,
+            cached_tokens: 0,
+            total_tokens: 0,
         },
     }
 }
@@ -750,8 +799,7 @@ pub fn translate_response_to_chat(body: &[u8]) -> Result<(Vec<u8>, UsageInfo), a
                         for part in parts {
                             let pt = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
                             // 接受 output_text / text / input_text 多种命名
-                            if matches!(pt, "output_text" | "text" | "input_text")
-                                || pt.is_empty()
+                            if matches!(pt, "output_text" | "text" | "input_text") || pt.is_empty()
                             {
                                 if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
                                     content.push_str(text);
@@ -795,7 +843,10 @@ pub fn translate_response_to_chat(body: &[u8]) -> Result<(Vec<u8>, UsageInfo), a
         message["tool_calls"] = Value::Array(tool_calls);
     }
 
-    let service_tier = resp.get("service_tier").and_then(|v| v.as_str()).unwrap_or("");
+    let service_tier = resp
+        .get("service_tier")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     let chat_resp = json!({
         "id": resp.get("id").unwrap_or(&Value::Null),
@@ -980,7 +1031,8 @@ impl StreamTranslator {
                                 self.first_delta_received = true;
                                 self.has_tool_calls = true;
 
-                                let idx = *self.tool_call_indices
+                                let idx = *self
+                                    .tool_call_indices
                                     .entry(item_id.to_string())
                                     .or_insert_with(|| {
                                         let i = self.next_tool_index;
@@ -1019,43 +1071,44 @@ impl StreamTranslator {
                                 if let Some(ref item) = event.item
                                     && item.item_type == Some("function_call")
                                 {
-                                        let item_id = item.id.unwrap_or("");
-                                        let name = item.name.unwrap_or("");
-                                        let call_id = item.call_id.unwrap_or("");
+                                    let item_id = item.id.unwrap_or("");
+                                    let name = item.name.unwrap_or("");
+                                    let call_id = item.call_id.unwrap_or("");
 
-                                        let idx = *self.tool_call_indices
-                                            .entry(item_id.to_string())
-                                            .or_insert_with(|| {
-                                                let i = self.next_tool_index;
-                                                self.next_tool_index += 1;
-                                                i
-                                            });
-                                        self.has_tool_calls = true;
+                                    let idx = *self
+                                        .tool_call_indices
+                                        .entry(item_id.to_string())
+                                        .or_insert_with(|| {
+                                            let i = self.next_tool_index;
+                                            self.next_tool_index += 1;
+                                            i
+                                        });
+                                    self.has_tool_calls = true;
 
-                                        let chunk = ChatChunk {
-                                            id: rid,
-                                            object: "chat.completion.chunk",
-                                            choices: [ChunkChoice {
-                                                index: 0,
-                                                delta: ChunkDelta {
-                                                    content: None,
-                                                    tool_calls: Some([ToolCallChunk {
-                                                        index: idx,
-                                                        id: Some(call_id),
-                                                        call_type: Some("function"),
-                                                        function: ToolCallFunc {
-                                                            name: Some(name),
-                                                            arguments: "",
-                                                        },
-                                                    }]),
-                                                },
-                                                finish_reason: None,
-                                            }],
-                                            usage: None,
-                                        };
-                                        output.extend_from_slice(b"data: ");
-                                        serde_json::to_writer(&mut output, &chunk)?;
-                                        output.extend_from_slice(b"\n\n");
+                                    let chunk = ChatChunk {
+                                        id: rid,
+                                        object: "chat.completion.chunk",
+                                        choices: [ChunkChoice {
+                                            index: 0,
+                                            delta: ChunkDelta {
+                                                content: None,
+                                                tool_calls: Some([ToolCallChunk {
+                                                    index: idx,
+                                                    id: Some(call_id),
+                                                    call_type: Some("function"),
+                                                    function: ToolCallFunc {
+                                                        name: Some(name),
+                                                        arguments: "",
+                                                    },
+                                                }]),
+                                            },
+                                            finish_reason: None,
+                                        }],
+                                        usage: None,
+                                    };
+                                    output.extend_from_slice(b"data: ");
+                                    serde_json::to_writer(&mut output, &chunk)?;
+                                    output.extend_from_slice(b"\n\n");
                                 }
                             }
 
@@ -1068,22 +1121,32 @@ impl StreamTranslator {
                                     self.service_tier = resp.service_tier.unwrap_or("").to_string();
                                 }
 
-                                let usage_json = self.usage.as_ref().map(|u| ChunkUsage {
-                                    prompt_tokens: u.input_tokens,
-                                    completion_tokens: u.output_tokens,
-                                    total_tokens: u.total_tokens,
-                                    reasoning_tokens: u.reasoning_tokens,
-                                    cached_tokens: u.cached_tokens,
-                                }).unwrap_or(ChunkUsage {
-                                    prompt_tokens: 0, completion_tokens: 0, total_tokens: 0,
-                                    reasoning_tokens: 0, cached_tokens: 0,
-                                });
+                                let usage_json = self
+                                    .usage
+                                    .as_ref()
+                                    .map(|u| ChunkUsage {
+                                        prompt_tokens: u.input_tokens,
+                                        completion_tokens: u.output_tokens,
+                                        total_tokens: u.total_tokens,
+                                        reasoning_tokens: u.reasoning_tokens,
+                                        cached_tokens: u.cached_tokens,
+                                    })
+                                    .unwrap_or(ChunkUsage {
+                                        prompt_tokens: 0,
+                                        completion_tokens: 0,
+                                        total_tokens: 0,
+                                        reasoning_tokens: 0,
+                                        cached_tokens: 0,
+                                    });
 
-                                let final_rid = event.response.as_ref()
-                                    .and_then(|r| r.id)
-                                    .unwrap_or(rid);
+                                let final_rid =
+                                    event.response.as_ref().and_then(|r| r.id).unwrap_or(rid);
 
-                                let finish = if self.has_tool_calls { "tool_calls" } else { "stop" };
+                                let finish = if self.has_tool_calls {
+                                    "tool_calls"
+                                } else {
+                                    "stop"
+                                };
 
                                 let chunk = ChatChunk {
                                     id: final_rid,
@@ -1231,13 +1294,21 @@ impl StreamTranslator {
         }
 
         // 提取 message
-        let message = ["/response/error/message", "/response/status_details/error/message", "/error/message"]
-            .iter()
-            .find_map(|p| value.pointer(p).and_then(|v| v.as_str()))
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "上游返回 response.failed".to_string());
+        let message = [
+            "/response/error/message",
+            "/response/status_details/error/message",
+            "/error/message",
+        ]
+        .iter()
+        .find_map(|p| value.pointer(p).and_then(|v| v.as_str()))
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "上游返回 response.failed".to_string());
 
-        let kind: &'static str = if status_code >= 500 { "server" } else { "client" };
+        let kind: &'static str = if status_code >= 500 {
+            "server"
+        } else {
+            "client"
+        };
 
         Some((status_code, kind, message))
     }
@@ -1261,7 +1332,9 @@ impl StreamTranslator {
 pub fn parse_sse_error(json_str: &str) -> Option<String> {
     let event: SseEvent = serde_json::from_str(json_str).ok()?;
     if event.event_type == "response.failed" {
-        let msg = event.response.as_ref()
+        let msg = event
+            .response
+            .as_ref()
             .and_then(|r| r.status_details.as_ref())
             .and_then(|d| d.error.as_ref())
             .and_then(|e| e.message)
@@ -1402,10 +1475,16 @@ mod tests {
     fn chat_to_responses_service_tier_mapping() {
         // priority → priority
         let chat = json!({"model": "x", "messages": [], "service_tier": "priority"});
-        assert_eq!(translate_chat_to_responses(&chat)["service_tier"], "priority");
+        assert_eq!(
+            translate_chat_to_responses(&chat)["service_tier"],
+            "priority"
+        );
         // fast alias → priority
         let chat = json!({"model": "x", "messages": [], "service_tier": "fast"});
-        assert_eq!(translate_chat_to_responses(&chat)["service_tier"], "priority");
+        assert_eq!(
+            translate_chat_to_responses(&chat)["service_tier"],
+            "priority"
+        );
         // auto → stripped (not forwarded to upstream)
         let chat = json!({"model": "x", "messages": [], "service_tier": "auto"});
         let resp = translate_chat_to_responses(&chat);
@@ -1545,7 +1624,8 @@ mod tests {
             }],
             "usage": {"input_tokens": 10, "output_tokens": 5}
         });
-        let (bytes, usage) = translate_response_to_chat(&serde_json::to_vec(&body).unwrap()).unwrap();
+        let (bytes, usage) =
+            translate_response_to_chat(&serde_json::to_vec(&body).unwrap()).unwrap();
         let resp: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(resp["choices"][0]["message"]["content"], "Hello world");
         assert_eq!(resp["choices"][0]["finish_reason"], "stop");
@@ -1667,8 +1747,16 @@ mod tests {
         );
         let out = t.translate_chunk(chunk.as_bytes()).unwrap();
         let s = String::from_utf8(out).unwrap();
-        assert!(!s.contains("reasoning_summary_text"), "summary delta leaked: {}", s);
-        assert!(!s.contains("reasoning_text"), "reasoning text delta leaked: {}", s);
+        assert!(
+            !s.contains("reasoning_summary_text"),
+            "summary delta leaked: {}",
+            s
+        );
+        assert!(
+            !s.contains("reasoning_text"),
+            "reasoning text delta leaked: {}",
+            s
+        );
         assert!(!s.contains("思考中"), "reasoning content leaked: {}", s);
     }
 
@@ -1711,7 +1799,11 @@ mod tests {
         sanitize_schema_for_upstream(&mut schema);
         assert!(schema["properties"]["a"].get("pattern").is_none());
         assert!(schema["anyOf"][0].get("minLength").is_none());
-        assert!(schema["anyOf"][1]["properties"]["b"].get("minimum").is_none());
+        assert!(
+            schema["anyOf"][1]["properties"]["b"]
+                .get("minimum")
+                .is_none()
+        );
         assert!(schema["$defs"]["Foo"].get("maxLength").is_none());
         // anyOf itself preserved
         assert!(schema["anyOf"].is_array());
@@ -1770,4 +1862,3 @@ mod tests {
         assert_eq!(resp["tools"][0]["parameters"]["type"], "object");
     }
 }
-

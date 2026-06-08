@@ -28,10 +28,10 @@ impl Scorer {
 
         // 分层 TTL 策略
         let ttl = match tier {
-            TIER_HEALTHY => 60,  // 健康账号 60 秒
-            TIER_WARM => 30,     // 温和账号 30 秒
-            TIER_RISKY => 10,    // 风险账号 10 秒
-            _ => 0,              // banned 不缓存
+            TIER_HEALTHY => 60, // 健康账号 60 秒
+            TIER_WARM => 30,    // 温和账号 30 秒
+            TIER_RISKY => 10,   // 风险账号 10 秒
+            _ => 0,             // banned 不缓存
         };
 
         // 检查缓存是否有效
@@ -224,8 +224,7 @@ impl Scorer {
         }
 
         // 时间因子：越接近 reset 越大
-        let time_factor =
-            1.0 - (time_remaining as f64 / PREMIUM_7D_URGENCY_WINDOW_SEC as f64);
+        let time_factor = 1.0 - (time_remaining as f64 / PREMIUM_7D_URGENCY_WINDOW_SEC as f64);
         // 配额因子：剩余配额占比，FULL_REMAINING_PCT 之上视为满
         let mut quota_factor = quota_remaining / PREMIUM_7D_URGENCY_FULL_REMAINING_PCT;
         quota_factor = quota_factor.clamp(0.0, 1.0);

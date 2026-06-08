@@ -18,12 +18,30 @@ struct VersionWeight {
 }
 
 static VERSIONS: &[VersionWeight] = &[
-    VersionWeight { version: "0.128.0", weight: 5 },
-    VersionWeight { version: "0.127.0", weight: 3 },
-    VersionWeight { version: "0.126.0", weight: 2 },
-    VersionWeight { version: "0.129.0-alpha.4", weight: 1 },
-    VersionWeight { version: "0.128.0-alpha.12", weight: 1 },
-    VersionWeight { version: "0.127.0-alpha.20", weight: 1 },
+    VersionWeight {
+        version: "0.128.0",
+        weight: 5,
+    },
+    VersionWeight {
+        version: "0.127.0",
+        weight: 3,
+    },
+    VersionWeight {
+        version: "0.126.0",
+        weight: 2,
+    },
+    VersionWeight {
+        version: "0.129.0-alpha.4",
+        weight: 1,
+    },
+    VersionWeight {
+        version: "0.128.0-alpha.12",
+        weight: 1,
+    },
+    VersionWeight {
+        version: "0.127.0-alpha.20",
+        weight: 1,
+    },
 ];
 
 /// 平台 + 终端组合模板（{V} 占位符替换为版本号）
@@ -84,10 +102,19 @@ impl DeviceProfile {
                 let (os, arch) = platform_from_ua(ua);
                 return Self {
                     user_agent: ua.clone(),
-                    package_version: config.device_package_version.clone().unwrap_or_else(|| version.to_string()),
-                    runtime_version: config.device_runtime_version.clone().unwrap_or_else(|| version.to_string()),
+                    package_version: config
+                        .device_package_version
+                        .clone()
+                        .unwrap_or_else(|| version.to_string()),
+                    runtime_version: config
+                        .device_runtime_version
+                        .clone()
+                        .unwrap_or_else(|| version.to_string()),
                     os: config.device_os.clone().unwrap_or_else(|| os.to_string()),
-                    arch: config.device_arch.clone().unwrap_or_else(|| arch.to_string()),
+                    arch: config
+                        .device_arch
+                        .clone()
+                        .unwrap_or_else(|| arch.to_string()),
                 };
             }
         }
@@ -99,10 +126,19 @@ impl DeviceProfile {
 
         Self {
             user_agent: ua.to_string(),
-            package_version: config.device_package_version.clone().unwrap_or_else(|| version.to_string()),
-            runtime_version: config.device_runtime_version.clone().unwrap_or_else(|| version.to_string()),
+            package_version: config
+                .device_package_version
+                .clone()
+                .unwrap_or_else(|| version.to_string()),
+            runtime_version: config
+                .device_runtime_version
+                .clone()
+                .unwrap_or_else(|| version.to_string()),
             os: config.device_os.clone().unwrap_or_else(|| os.to_string()),
-            arch: config.device_arch.clone().unwrap_or_else(|| arch.to_string()),
+            arch: config
+                .device_arch
+                .clone()
+                .unwrap_or_else(|| arch.to_string()),
         }
     }
 }
@@ -172,7 +208,6 @@ fn fnv32a(data: &[u8]) -> u32 {
 // codex_app / codex_chatgpt_desktop / codex_atlas / codex_exec / codex_sdk_ts / codex /
 // opencode）。命中后上游可放行额外能力（如 reasoning_effort=xhigh），并允许
 // 透传下游 UA / Originator 而不是覆盖成兜底值。
-
 
 #[cfg(test)]
 mod tests {

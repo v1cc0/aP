@@ -10,10 +10,10 @@ mod token;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use axum::Router;
 use axum::extract::{DefaultBodyLimit, Path};
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, patch, post, put};
-use axum::Router;
 use tower_http::cors::CorsLayer;
 use tracing::{error, info, warn};
 
@@ -38,9 +38,14 @@ async fn main() {
     info!(port = config.port, "启动 codex-proxy");
 
     // 初始化数据库（先小池读配置，再按配置建正式池）
-    let boot_pool = db::init(&config.database_url, 2, config.db_begin_concurrent, config.db_multiprocess_wal)
-        .await
-        .expect("数据库初始化失败");
+    let boot_pool = db::init(
+        &config.database_url,
+        2,
+        config.db_begin_concurrent,
+        config.db_multiprocess_wal,
+    )
+    .await
+    .expect("数据库初始化失败");
 
     // 加载系统设置
     let mut settings = db::queries::get_system_settings(&boot_pool)
@@ -50,22 +55,38 @@ async fn main() {
     sync_config_proxies(&boot_pool, &config, &mut settings).await;
 
     // 用 pg_max_conns 兼容字段创建 Turso 逻辑连接上限
-    let pool_size = if settings.pg_max_conns > 0 { settings.pg_max_conns as u32 } else { config.db_pool_size };
+    let pool_size = if settings.pg_max_conns > 0 {
+        settings.pg_max_conns as u32
+    } else {
+        config.db_pool_size
+    };
     let db_pool = if pool_size > 2 {
         boot_pool.close().await;
-        db::init(&config.database_url, pool_size, config.db_begin_concurrent, config.db_multiprocess_wal)
-            .await
-            .expect("数据库初始化失败")
+        db::init(
+            &config.database_url,
+            pool_size,
+            config.db_begin_concurrent,
+            config.db_multiprocess_wal,
+        )
+        .await
+        .expect("数据库初始化失败")
     } else {
         boot_pool
     };
-    info!(max_concurrency = settings.max_concurrency, global_rpm = settings.global_rpm, pg_max_conns = pool_size, "系统设置已加载");
+    info!(
+        max_concurrency = settings.max_concurrency,
+        global_rpm = settings.global_rpm,
+        pg_max_conns = pool_size,
+        "系统设置已加载"
+    );
 
     // 初始化调度器
     let scheduler = Scheduler::new(settings.max_concurrency as i64);
 
     // 从数据库加载现有账号
-    let db_accounts = db::queries::list_active_accounts(&db_pool).await.unwrap_or_default();
+    let db_accounts = db::queries::list_active_accounts(&db_pool)
+        .await
+        .unwrap_or_default();
     let loaded_count = db_accounts.len();
     let mut enabled_count = 0;
     for row in db_accounts {
@@ -106,12 +127,16 @@ async fn main() {
         // 恢复用量重置时间
         if !creds.codex_7d_reset_at.is_empty() {
             if let Ok(ts) = creds.codex_7d_reset_at.parse::<i64>() {
-                account.resets_at.store(ts, std::sync::atomic::Ordering::Relaxed);
+                account
+                    .resets_at
+                    .store(ts, std::sync::atomic::Ordering::Relaxed);
             }
         }
         if !creds.codex_5h_reset_at.is_empty() {
             if let Ok(ts) = creds.codex_5h_reset_at.parse::<i64>() {
-                account.resets_5h_at.store(ts, std::sync::atomic::Ordering::Relaxed);
+                account
+                    .resets_5h_at
+                    .store(ts, std::sync::atomic::Ordering::Relaxed);
             }
         }
 
@@ -124,48 +149,84 @@ async fn main() {
             if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(cd_str) {
                 let ts = dt.timestamp();
                 if ts > now {
-                    account.cooldown_until.store(ts, std::sync::atomic::Ordering::Relaxed);
+                    account
+                        .cooldown_until
+                        .store(ts, std::sync::atomic::Ordering::Relaxed);
                     restored_cooldown = true;
                 }
             }
             // 如果 cooldown_reason 是 banned_401，恢复 banned 状态
             if restored_cooldown && row.cooldown_reason == "banned_401" {
-                account.last_unauthorized_at.store(now - 1, std::sync::atomic::Ordering::Relaxed);
-                account.health_tier.store(scheduler::TIER_BANNED, std::sync::atomic::Ordering::Relaxed);
-                account.dynamic_concurrency_limit.store(0, std::sync::atomic::Ordering::Relaxed);
+                account
+                    .last_unauthorized_at
+                    .store(now - 1, std::sync::atomic::Ordering::Relaxed);
+                account
+                    .health_tier
+                    .store(scheduler::TIER_BANNED, std::sync::atomic::Ordering::Relaxed);
+                account
+                    .dynamic_concurrency_limit
+                    .store(0, std::sync::atomic::Ordering::Relaxed);
             }
         }
 
         // 2) 兜底：从用量数据推导冷却（数据库无 cooldown_until 但用量满的情况）
         if !restored_cooldown {
-            let usage_7d = account.usage_7d_pct_100.load(std::sync::atomic::Ordering::Relaxed);
-            let usage_5h = account.usage_5h_pct_100.load(std::sync::atomic::Ordering::Relaxed);
+            let usage_7d = account
+                .usage_7d_pct_100
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let usage_5h = account
+                .usage_5h_pct_100
+                .load(std::sync::atomic::Ordering::Relaxed);
             let resets_at = account.resets_at.load(std::sync::atomic::Ordering::Relaxed);
-            let resets_5h = account.resets_5h_at.load(std::sync::atomic::Ordering::Relaxed);
+            let resets_5h = account
+                .resets_5h_at
+                .load(std::sync::atomic::Ordering::Relaxed);
 
             if usage_5h >= 10000 && usage_7d < 10000 {
                 // 仅 5h 满 — 用 5h reset 时间
-                let cooldown_until = if resets_5h > now { resets_5h } else if resets_at > now { resets_at } else { now + 5 * 3600 };
-                account.cooldown_until.store(cooldown_until, std::sync::atomic::Ordering::Relaxed);
+                let cooldown_until = if resets_5h > now {
+                    resets_5h
+                } else if resets_at > now {
+                    resets_at
+                } else {
+                    now + 5 * 3600
+                };
+                account
+                    .cooldown_until
+                    .store(cooldown_until, std::sync::atomic::Ordering::Relaxed);
             } else if usage_7d >= 10000 {
-                let cooldown_until = if resets_at > now { resets_at } else { now + 7 * 24 * 3600 };
-                account.cooldown_until.store(cooldown_until, std::sync::atomic::Ordering::Relaxed);
+                let cooldown_until = if resets_at > now {
+                    resets_at
+                } else {
+                    now + 7 * 24 * 3600
+                };
+                account
+                    .cooldown_until
+                    .store(cooldown_until, std::sync::atomic::Ordering::Relaxed);
             } else if resets_at > now {
-                account.cooldown_until.store(resets_at, std::sync::atomic::Ordering::Relaxed);
+                account
+                    .cooldown_until
+                    .store(resets_at, std::sync::atomic::Ordering::Relaxed);
             }
         }
 
         scheduler.add_account(account);
         enabled_count += 1;
     }
-    info!(total = loaded_count, enabled = enabled_count, "已加载账号到调度器");
+    info!(
+        total = loaded_count,
+        enabled = enabled_count,
+        "已加载账号到调度器"
+    );
 
     // 从数据库恢复请求计数（跨重启保持一致）
     if let Ok(counts) = db::queries::get_account_request_counts(&db_pool).await {
         for acc in scheduler.all_accounts() {
             if let Some(&(total, errors)) = counts.get(&acc.db_id) {
-                acc.total_requests.store(total, std::sync::atomic::Ordering::Relaxed);
-                acc.error_requests.store(errors, std::sync::atomic::Ordering::Relaxed);
+                acc.total_requests
+                    .store(total, std::sync::atomic::Ordering::Relaxed);
+                acc.error_requests
+                    .store(errors, std::sync::atomic::Ordering::Relaxed);
             }
         }
     }
@@ -193,9 +254,13 @@ async fn main() {
     let has_keys = state.api_keys.has_any().await;
     if !has_keys {
         if config.allow_anonymous_v1 {
-            warn!("⚠ /v1/* 当前处于【匿名访问】模式（app.allow_anonymous_v1=true in config.toml）。生产环境请创建 API Key 后取消此设置。");
+            warn!(
+                "⚠ /v1/* 当前处于【匿名访问】模式（app.allow_anonymous_v1=true in config.toml）。生产环境请创建 API Key 后取消此设置。"
+            );
         } else {
-            warn!("⚠ 尚未配置任何 API Key，/v1/* 路由将拒绝所有请求（503）。请在管理后台创建 API Key，或设置 app.allow_anonymous_v1=true in config.toml。");
+            warn!(
+                "⚠ 尚未配置任何 API Key，/v1/* 路由将拒绝所有请求（503）。请在管理后台创建 API Key，或设置 app.allow_anonymous_v1=true in config.toml。"
+            );
         }
     }
 
@@ -213,9 +278,7 @@ async fn main() {
         .await
         .expect("绑定地址失败");
 
-    axum::serve(listener, app)
-        .await
-        .expect("服务器运行失败");
+    axum::serve(listener, app).await.expect("服务器运行失败");
 }
 
 async fn sync_config_proxies(
@@ -256,7 +319,10 @@ async fn sync_config_proxies(
         if let Err(e) = db::queries::update_system_settings(pool, settings).await {
             error!("同步 proxy.url 配置到数据库系统设置失败: {}", e);
         } else {
-            info!(count = config.proxy_urls.len(), "已自动识别 config.toml 中的 proxy.url 配置");
+            info!(
+                count = config.proxy_urls.len(),
+                "已自动识别 config.toml 中的 proxy.url 配置"
+            );
         }
     }
 }
@@ -269,17 +335,29 @@ fn build_router(state: Arc<AppState>) -> Router {
     // 全部挂上 API Key 鉴权中间件（fail-closed）
     let proxy_routes = Router::new()
         // /v1 前缀（标准）
-        .route("/v1/chat/completions", post(proxy::handler::chat_completions))
+        .route(
+            "/v1/chat/completions",
+            post(proxy::handler::chat_completions),
+        )
         .route("/v1/responses", post(proxy::handler::responses))
-        .route("/v1/responses/compact", post(proxy::handler::responses_compact))
+        .route(
+            "/v1/responses/compact",
+            post(proxy::handler::responses_compact),
+        )
         .route("/v1/models", get(proxy::handler::list_models))
         // 无前缀兼容（base_url 已含 /v1 的客户端）
         .route("/chat/completions", post(proxy::handler::chat_completions))
         .route("/responses", post(proxy::handler::responses))
-        .route("/responses/compact", post(proxy::handler::responses_compact))
+        .route(
+            "/responses/compact",
+            post(proxy::handler::responses_compact),
+        )
         .route("/models", get(proxy::handler::list_models))
         // Codex CLI 原生路径（base_url=https://host 直连）
-        .route("/backend-api/codex/responses", post(proxy::handler::responses))
+        .route(
+            "/backend-api/codex/responses",
+            post(proxy::handler::responses),
+        )
         .route(
             "/backend-api/codex/responses/compact",
             post(proxy::handler::responses_compact),
@@ -298,26 +376,77 @@ fn build_router(state: Arc<AppState>) -> Router {
         // 账号管理
         .route("/api/admin/accounts", get(admin::handler::list_accounts))
         .route("/api/admin/accounts", post(admin::handler::add_account))
-        .route("/api/admin/accounts/at", post(admin::handler::add_at_account))
-        .route("/api/admin/accounts/batch", post(admin::handler::batch_import))
-        .route("/api/admin/accounts/import", post(admin::handler::import_accounts))
-        .route("/api/admin/accounts/{id}", delete(admin::handler::delete_account))
-        .route("/api/admin/accounts/batch-delete", post(admin::handler::batch_delete_accounts))
-        .route("/api/admin/accounts/{id}/refresh", post(admin::handler::refresh_account))
-        .route("/api/admin/accounts/{id}/enable", post(admin::handler::toggle_account_enabled))
-        .route("/api/admin/accounts/batch-refresh", post(admin::handler::batch_refresh))
-        .route("/api/admin/accounts/{id}/test", get(admin::handler::test_connection))
-        .route("/api/admin/accounts/{id}/usage", get(admin::handler::account_usage))
-        .route("/api/admin/accounts/batch-test", post(admin::handler::batch_test))
-        .route("/api/admin/accounts/clean-banned", post(admin::handler::clean_banned))
-        .route("/api/admin/accounts/clean-rate-limited", post(admin::handler::clean_rate_limited))
-        .route("/api/admin/accounts/clean-error", post(admin::handler::clean_error))
-        .route("/api/admin/accounts/event-trend", get(admin::handler::account_event_trend))
+        .route(
+            "/api/admin/accounts/at",
+            post(admin::handler::add_at_account),
+        )
+        .route(
+            "/api/admin/accounts/batch",
+            post(admin::handler::batch_import),
+        )
+        .route(
+            "/api/admin/accounts/import",
+            post(admin::handler::import_accounts),
+        )
+        .route(
+            "/api/admin/accounts/{id}",
+            delete(admin::handler::delete_account),
+        )
+        .route(
+            "/api/admin/accounts/batch-delete",
+            post(admin::handler::batch_delete_accounts),
+        )
+        .route(
+            "/api/admin/accounts/{id}/refresh",
+            post(admin::handler::refresh_account),
+        )
+        .route(
+            "/api/admin/accounts/{id}/enable",
+            post(admin::handler::toggle_account_enabled),
+        )
+        .route(
+            "/api/admin/accounts/batch-refresh",
+            post(admin::handler::batch_refresh),
+        )
+        .route(
+            "/api/admin/accounts/{id}/test",
+            get(admin::handler::test_connection),
+        )
+        .route(
+            "/api/admin/accounts/{id}/usage",
+            get(admin::handler::account_usage),
+        )
+        .route(
+            "/api/admin/accounts/batch-test",
+            post(admin::handler::batch_test),
+        )
+        .route(
+            "/api/admin/accounts/clean-banned",
+            post(admin::handler::clean_banned),
+        )
+        .route(
+            "/api/admin/accounts/clean-rate-limited",
+            post(admin::handler::clean_rate_limited),
+        )
+        .route(
+            "/api/admin/accounts/clean-error",
+            post(admin::handler::clean_error),
+        )
+        .route(
+            "/api/admin/accounts/event-trend",
+            get(admin::handler::account_event_trend),
+        )
         // 使用统计
         .route("/api/admin/usage/stats", get(admin::handler::usage_stats))
         .route("/api/admin/usage/logs", get(admin::handler::usage_logs))
-        .route("/api/admin/usage/logs", delete(admin::handler::clear_usage_logs))
-        .route("/api/admin/usage/chart-data", get(admin::handler::chart_data))
+        .route(
+            "/api/admin/usage/logs",
+            delete(admin::handler::clear_usage_logs),
+        )
+        .route(
+            "/api/admin/usage/chart-data",
+            get(admin::handler::chart_data),
+        )
         // 运维
         .route("/api/admin/ops/overview", get(admin::handler::ops_overview))
         // 设置
@@ -330,9 +459,18 @@ fn build_router(state: Arc<AppState>) -> Router {
         // 代理池
         .route("/api/admin/proxies", get(admin::handler::list_proxies))
         .route("/api/admin/proxies", post(admin::handler::add_proxies))
-        .route("/api/admin/proxies/{id}", delete(admin::handler::delete_proxy))
-        .route("/api/admin/proxies/{id}", patch(admin::handler::update_proxy))
-        .route("/api/admin/proxies/batch-delete", post(admin::handler::batch_delete_proxies))
+        .route(
+            "/api/admin/proxies/{id}",
+            delete(admin::handler::delete_proxy),
+        )
+        .route(
+            "/api/admin/proxies/{id}",
+            patch(admin::handler::update_proxy),
+        )
+        .route(
+            "/api/admin/proxies/batch-delete",
+            post(admin::handler::batch_delete_proxies),
+        )
         .route("/api/admin/proxies/test", post(admin::handler::test_proxy))
         // 模型列表
         .route("/api/admin/models", get(admin::handler::list_models));
@@ -341,7 +479,10 @@ fn build_router(state: Arc<AppState>) -> Router {
     let health = Router::new().route("/health", get(|| async { "ok" }));
 
     // 根路径自动重定向到前端页面 /admin
-    let root = Router::new().route("/", get(|| async { axum::response::Redirect::temporary("/admin") }));
+    let root = Router::new().route(
+        "/",
+        get(|| async { axum::response::Redirect::temporary("/admin") }),
+    );
 
     // 前端静态文件 — /admin/ 路径下的所有请求由嵌入的前端处理
     let frontend = Router::new()
@@ -438,7 +579,7 @@ mod tests {
 // ─── 前端静态文件服务 ───
 
 // 使用 include_dir 在编译时嵌入前端产物
-use include_dir::{include_dir, Dir};
+use include_dir::{Dir, include_dir};
 
 static FRONTEND_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/frontend/dist");
 
@@ -510,10 +651,7 @@ fn mime_from_path(path: &str) -> &'static str {
 }
 
 /// 启动后台任务
-fn spawn_background_tasks(
-    state: Arc<AppState>,
-    mut log_rx: tokio::sync::mpsc::Receiver<UsageLog>,
-) {
+fn spawn_background_tasks(state: Arc<AppState>, mut log_rx: tokio::sync::mpsc::Receiver<UsageLog>) {
     // 1. 使用日志批量写入（自适应批量大小）
     let db = state.db();
     tokio::spawn(async move {
@@ -705,8 +843,8 @@ async fn refresh_expiring_tokens(state: &AppState, _client: &reqwest::Client) {
             match token::refresh::refresh_with_retry(&client, &rt).await {
                 Ok(resp) => {
                     let info = token::parse_id_token(&resp.id_token).unwrap_or_default();
-                    let new_expires = chrono::Utc::now()
-                        + chrono::Duration::seconds(resp.expires_in);
+                    let new_expires =
+                        chrono::Utc::now() + chrono::Duration::seconds(resp.expires_in);
 
                     *acc_clone.access_token.write() = resp.access_token.clone();
                     if !resp.refresh_token.is_empty() {
@@ -731,7 +869,8 @@ async fn refresh_expiring_tokens(state: &AppState, _client: &reqwest::Client) {
                         plan_type: info.chatgpt_plan_type,
                         ..Default::default()
                     };
-                    let _ = db::queries::update_account_credentials(&db, acc_clone.db_id, &creds).await;
+                    let _ =
+                        db::queries::update_account_credentials(&db, acc_clone.db_id, &creds).await;
 
                     info!(account_id = acc_clone.db_id, "Token 刷新成功");
                 }
@@ -768,8 +907,7 @@ async fn probe_recovery(state: &AppState, client: &reqwest::Client) {
 
         match token::refresh::refresh_access_token(client, &rt).await {
             Ok(resp) => {
-                let new_expires = chrono::Utc::now()
-                    + chrono::Duration::seconds(resp.expires_in);
+                let new_expires = chrono::Utc::now() + chrono::Duration::seconds(resp.expires_in);
                 *acc.access_token.write() = resp.access_token;
                 if !resp.refresh_token.is_empty() {
                     *acc.refresh_token.write() = resp.refresh_token;
@@ -808,7 +946,9 @@ async fn auto_cleanup_sweep(state: &AppState) {
         let should_clean = match tier {
             // BANNED（401）
             scheduler::TIER_BANNED if settings.auto_clean_unauthorized => {
-                acc.last_unauthorized_at.load(std::sync::atomic::Ordering::Relaxed) > 0
+                acc.last_unauthorized_at
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    > 0
             }
             // RISKY（多次失败 / error）
             scheduler::TIER_RISKY if settings.auto_clean_error => true,
@@ -821,7 +961,8 @@ async fn auto_cleanup_sweep(state: &AppState) {
         if should_clean || rate_limited_clean {
             let _ = db::queries::delete_account(&state.db(), acc.db_id).await;
             state.scheduler.remove_account(acc.db_id);
-            db::queries::insert_account_event(&state.db(), acc.db_id, "deleted", "auto_clean").await;
+            db::queries::insert_account_event(&state.db(), acc.db_id, "deleted", "auto_clean")
+                .await;
             cleaned += 1;
         }
     }
@@ -833,7 +974,9 @@ async fn auto_cleanup_sweep(state: &AppState) {
 
 /// 用量满账号清理（5 分钟）— usage ≥ 100%
 async fn auto_cleanup_full_usage(state: &AppState) {
-    let enabled = state.db_settings_cache.read()
+    let enabled = state
+        .db_settings_cache
+        .read()
         .map(|s| s.auto_clean_full_usage)
         .unwrap_or(false);
     if !enabled {
@@ -845,16 +988,28 @@ async fn auto_cleanup_full_usage(state: &AppState) {
 
     for acc in &accounts {
         // 跳过正在处理请求的账号
-        if acc.active_requests.load(std::sync::atomic::Ordering::Relaxed) > 0 {
+        if acc
+            .active_requests
+            .load(std::sync::atomic::Ordering::Relaxed)
+            > 0
+        {
             continue;
         }
 
         // 7 天用量 ≥ 100%（存储为 pct * 100 的整数）
-        let usage_7d = acc.usage_7d_pct_100.load(std::sync::atomic::Ordering::Relaxed);
+        let usage_7d = acc
+            .usage_7d_pct_100
+            .load(std::sync::atomic::Ordering::Relaxed);
         if usage_7d >= 10000 {
             let _ = db::queries::delete_account(&state.db(), acc.db_id).await;
             state.scheduler.remove_account(acc.db_id);
-            db::queries::insert_account_event(&state.db(), acc.db_id, "deleted", "clean_full_usage").await;
+            db::queries::insert_account_event(
+                &state.db(),
+                acc.db_id,
+                "deleted",
+                "clean_full_usage",
+            )
+            .await;
             cleaned += 1;
         }
     }
@@ -866,7 +1021,9 @@ async fn auto_cleanup_full_usage(state: &AppState) {
 
 /// 过期账号清理（15 分钟）— 加入号池超过 30 分钟且未被充分验证的账号
 async fn auto_cleanup_expired(state: &AppState) {
-    let enabled = state.db_settings_cache.read()
+    let enabled = state
+        .db_settings_cache
+        .read()
         .map(|s| s.auto_clean_expired)
         .unwrap_or(false);
     if !enabled {
@@ -883,11 +1040,19 @@ async fn auto_cleanup_expired(state: &AppState) {
             continue;
         }
         // 正在处理请求 → 跳过
-        if acc.active_requests.load(std::sync::atomic::Ordering::Relaxed) > 0 {
+        if acc
+            .active_requests
+            .load(std::sync::atomic::Ordering::Relaxed)
+            > 0
+        {
             continue;
         }
         // 已验证账号（成功请求 > 10 次）→ 跳过
-        if acc.total_requests.load(std::sync::atomic::Ordering::Relaxed) > 10 {
+        if acc
+            .total_requests
+            .load(std::sync::atomic::Ordering::Relaxed)
+            > 10
+        {
             continue;
         }
 
@@ -927,7 +1092,9 @@ async fn check_usage_reset(state: &AppState) {
         return;
     }
 
-    let test_model = state.db_settings_cache.read()
+    let test_model = state
+        .db_settings_cache
+        .read()
         .map(|s| s.test_model.clone())
         .unwrap_or_else(|_| "gpt-5.4-mini".to_string());
 
@@ -994,13 +1161,18 @@ async fn probe_and_recover(state: &AppState, acc: &Arc<Account>, model: &str) {
     match status {
         200 => {
             // 200 不代表用量一定恢复 — 检查响应头中的实际用量
-            let usage_7d = acc.usage_7d_pct_100.load(std::sync::atomic::Ordering::Relaxed);
-            let usage_5h = acc.usage_5h_pct_100.load(std::sync::atomic::Ordering::Relaxed);
+            let usage_7d = acc
+                .usage_7d_pct_100
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let usage_5h = acc
+                .usage_5h_pct_100
+                .load(std::sync::atomic::Ordering::Relaxed);
 
             if usage_7d >= 10000 || usage_5h >= 10000 {
                 // 用量仍 ≥ 100% — 不恢复，30 分钟后再探测
                 let retry_at = chrono::Utc::now().timestamp() + 1800;
-                acc.resets_at.store(retry_at, std::sync::atomic::Ordering::Relaxed);
+                acc.resets_at
+                    .store(retry_at, std::sync::atomic::Ordering::Relaxed);
                 warn!(
                     account_id = acc.db_id,
                     usage_7d = usage_7d as f64 / 100.0,
@@ -1012,9 +1184,12 @@ async fn probe_and_recover(state: &AppState, acc: &Arc<Account>, model: &str) {
 
             // 用量 < 100% — 确认恢复
             acc.resets_at.store(0, std::sync::atomic::Ordering::Relaxed);
-            acc.resets_5h_at.store(0, std::sync::atomic::Ordering::Relaxed);
-            acc.usage_7d_pct_100.store(0, std::sync::atomic::Ordering::Relaxed);
-            acc.usage_5h_pct_100.store(0, std::sync::atomic::Ordering::Relaxed);
+            acc.resets_5h_at
+                .store(0, std::sync::atomic::Ordering::Relaxed);
+            acc.usage_7d_pct_100
+                .store(0, std::sync::atomic::Ordering::Relaxed);
+            acc.usage_5h_pct_100
+                .store(0, std::sync::atomic::Ordering::Relaxed);
             state.scheduler.try_recover(acc);
 
             let db = state.db();
@@ -1030,21 +1205,33 @@ async fn probe_and_recover(state: &AppState, acc: &Arc<Account>, model: &str) {
             // 仍然限流 — 从新响应更新 resets_at
             let body = resp.text().await.unwrap_or_default();
             if let Ok(body_json) = serde_json::from_str::<serde_json::Value>(&body) {
-                if let Some(ts) = body_json.pointer("/error/resets_at").and_then(|v| v.as_i64()) {
-                    acc.resets_at.store(ts, std::sync::atomic::Ordering::Relaxed);
+                if let Some(ts) = body_json
+                    .pointer("/error/resets_at")
+                    .and_then(|v| v.as_i64())
+                {
+                    acc.resets_at
+                        .store(ts, std::sync::atomic::Ordering::Relaxed);
                     let db = state.db();
                     let aid = acc.db_id;
                     tokio::spawn(async move {
                         let _ = db::queries::update_account_resets_at(&db, aid, ts).await;
                     });
-                    warn!(account_id = acc.db_id, resets_at = ts, "重置探针 429 — 已更新下次重置时间");
+                    warn!(
+                        account_id = acc.db_id,
+                        resets_at = ts,
+                        "重置探针 429 — 已更新下次重置时间"
+                    );
                     return;
                 }
             }
             // 429 但没有新的 resets_at → 30 分钟后再试
             let retry_at = chrono::Utc::now().timestamp() + 1800;
-            acc.resets_at.store(retry_at, std::sync::atomic::Ordering::Relaxed);
-            warn!(account_id = acc.db_id, "重置探针 429 无 resets_at — 30 分钟后重试");
+            acc.resets_at
+                .store(retry_at, std::sync::atomic::Ordering::Relaxed);
+            warn!(
+                account_id = acc.db_id,
+                "重置探针 429 无 resets_at — 30 分钟后重试"
+            );
         }
         401 => {
             // Token 失效 — 标记 banned，清除探针
@@ -1061,7 +1248,10 @@ async fn probe_and_recover(state: &AppState, acc: &Arc<Account>, model: &str) {
         }
         _ => {
             // 其他错误 → 不动状态，下个周期重试
-            warn!(account_id = acc.db_id, status, "重置探针异常状态码，稍后重试");
+            warn!(
+                account_id = acc.db_id,
+                status, "重置探针异常状态码，稍后重试"
+            );
         }
     }
 }

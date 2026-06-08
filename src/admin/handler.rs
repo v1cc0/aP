@@ -1,13 +1,13 @@
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::Json;
 use futures::StreamExt;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::db::models::*;
 use crate::db::queries;
@@ -83,7 +83,9 @@ pub async fn stats(State(state): State<Arc<AppState>>, headers: HeaderMap) -> im
         .filter(|a| a.health_tier.load(Ordering::Relaxed) == scheduler::TIER_BANNED)
         .count();
 
-    let today_requests = queries::count_today_requests(&state.db()).await.unwrap_or(0);
+    let today_requests = queries::count_today_requests(&state.db())
+        .await
+        .unwrap_or(0);
 
     Json(json!({
         "total": total,
@@ -205,20 +207,22 @@ pub async fn add_account(
     }
 
     // 先查库去重
-    let existing = queries::get_all_refresh_tokens(&state.db()).await.unwrap_or_default();
+    let existing = queries::get_all_refresh_tokens(&state.db())
+        .await
+        .unwrap_or_default();
     if existing.contains(&req.refresh_token) {
         return (
             StatusCode::CONFLICT,
             Json(json!({"error": "该 Refresh Token 已存在"})),
-        ).into_response();
+        )
+            .into_response();
     }
 
     let client = crate::proxy::handler::get_or_create_client(&state, &req.proxy_url);
     match token::refresh::refresh_with_retry(&client, &req.refresh_token).await {
         Ok(token_resp) => {
             let info = token::parse_id_token(&token_resp.id_token).unwrap_or_default();
-            let expires_at =
-                chrono::Utc::now() + chrono::Duration::seconds(token_resp.expires_in);
+            let expires_at = chrono::Utc::now() + chrono::Duration::seconds(token_resp.expires_in);
 
             let creds = Credentials {
                 refresh_token: if token_resp.refresh_token.is_empty() {
@@ -450,7 +454,9 @@ pub async fn batch_import(
     }
 
     // 数据库去重
-    let existing = queries::get_all_refresh_tokens(&state.db()).await.unwrap_or_default();
+    let existing = queries::get_all_refresh_tokens(&state.db())
+        .await
+        .unwrap_or_default();
     let mut new_tokens: Vec<String> = Vec::new();
     let mut duplicate_count = 0usize;
     for rt in &tokens {
@@ -466,7 +472,8 @@ pub async fn batch_import(
             "results": [],
             "message": format!("所有 {} 个 RT 已存在，无需导入", tokens.len()),
             "duplicate": duplicate_count,
-        })).into_response();
+        }))
+        .into_response();
     }
 
     let client = crate::proxy::handler::get_or_create_client(&state, &req.proxy_url);
@@ -610,7 +617,7 @@ pub async fn refresh_account(
                 StatusCode::NOT_FOUND,
                 Json(json!({"error": "account not found"})),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -621,13 +628,13 @@ pub async fn refresh_account(
     }
 
     let account_proxy = account.proxy_url.read().clone();
-    let proxy_url = crate::proxy::handler::get_resolved_proxy(&state, account.db_id, &account_proxy);
+    let proxy_url =
+        crate::proxy::handler::get_resolved_proxy(&state, account.db_id, &account_proxy);
     let client = crate::proxy::handler::get_or_create_client(&state, &proxy_url);
     match token::refresh::refresh_with_retry(&client, &rt).await {
         Ok(token_resp) => {
             let info = token::parse_id_token(&token_resp.id_token).unwrap_or_default();
-            let expires_at =
-                chrono::Utc::now() + chrono::Duration::seconds(token_resp.expires_in);
+            let expires_at = chrono::Utc::now() + chrono::Duration::seconds(token_resp.expires_in);
 
             *account.access_token.write() = token_resp.access_token;
             if !token_resp.refresh_token.is_empty() {
@@ -728,7 +735,8 @@ pub async fn batch_refresh(
     if rt_count == 0 {
         return Json(json!({
             "total": total, "refreshed": 0, "success": 0, "fail": 0, "skipped": total,
-        })).into_response();
+        }))
+        .into_response();
     }
 
     info!(total, rt_count, "批量刷新令牌开始");
@@ -745,13 +753,15 @@ pub async fn batch_refresh(
             let _permit = sem.acquire().await.unwrap();
             let rt = acc.refresh_token.read().clone();
             let account_proxy = acc.proxy_url.read().clone();
-            let proxy_url = crate::proxy::handler::get_resolved_proxy(&state, acc.db_id, &account_proxy);
+            let proxy_url =
+                crate::proxy::handler::get_resolved_proxy(&state, acc.db_id, &account_proxy);
             let client = crate::proxy::handler::get_or_create_client(&state, &proxy_url);
 
             match token::refresh::refresh_with_retry(&client, &rt).await {
                 Ok(resp) => {
                     let info = token::parse_id_token(&resp.id_token).unwrap_or_default();
-                    let expires_at = chrono::Utc::now() + chrono::Duration::seconds(resp.expires_in);
+                    let expires_at =
+                        chrono::Utc::now() + chrono::Duration::seconds(resp.expires_in);
 
                     *acc.access_token.write() = resp.access_token.clone();
                     if !resp.refresh_token.is_empty() {
@@ -776,7 +786,8 @@ pub async fn batch_refresh(
                         plan_type: info.chatgpt_plan_type,
                         ..Default::default()
                     };
-                    let _ = queries::update_account_credentials(&state.db(), acc.db_id, &creds).await;
+                    let _ =
+                        queries::update_account_credentials(&state.db(), acc.db_id, &creds).await;
 
                     true
                 }
@@ -806,7 +817,8 @@ pub async fn batch_refresh(
         "success": success,
         "fail": fail,
         "skipped": skipped,
-    })).into_response()
+    }))
+    .into_response()
 }
 
 /// GET /api/admin/accounts/{id}/usage → AccountUsageDetail
@@ -894,8 +906,8 @@ pub async fn test_connection(
         let version = crate::proxy::useragent::version_from_ua(ua);
 
         // 构建 client（带代理）
-        let mut builder = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(10));
+        let mut builder =
+            reqwest::Client::builder().connect_timeout(std::time::Duration::from_secs(10));
         let resolved_proxy = crate::proxy::handler::get_resolved_proxy(&state, id, &proxy_url);
         if !resolved_proxy.is_empty() {
             if let Ok(proxy) = reqwest::Proxy::all(&resolved_proxy) {
@@ -924,7 +936,10 @@ pub async fn test_connection(
         let resp = match req.send().await {
             Ok(r) => r,
             Err(e) => {
-                send_event(&tx, json!({"type": "error", "error": format!("请求失败: {}", e)}));
+                send_event(
+                    &tx,
+                    json!({"type": "error", "error": format!("请求失败: {}", e)}),
+                );
                 return;
             }
         };
@@ -932,8 +947,15 @@ pub async fn test_connection(
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
-            let truncated = if body.len() > 500 { &body[..500] } else { &body };
-            send_event(&tx, json!({"type": "error", "error": format!("上游返回 {}: {}", status, truncated)}));
+            let truncated = if body.len() > 500 {
+                &body[..500]
+            } else {
+                &body
+            };
+            send_event(
+                &tx,
+                json!({"type": "error", "error": format!("上游返回 {}: {}", status, truncated)}),
+            );
             return;
         }
 
@@ -976,7 +998,10 @@ pub async fn test_connection(
                         }
                         "response.completed" => {
                             let duration = start.elapsed().as_millis();
-                            send_event(&tx, json!({"type": "content", "text": format!("\n\n--- 耗时 {}ms ---", duration)}));
+                            send_event(
+                                &tx,
+                                json!({"type": "content", "text": format!("\n\n--- 耗时 {}ms ---", duration)}),
+                            );
                             send_event(&tx, json!({"type": "test_complete", "success": true}));
                             return;
                         }
@@ -1022,19 +1047,24 @@ pub async fn batch_test(
     }
 
     // 解析可选的 ids 过滤
-    let filter_ids: Option<std::collections::HashSet<i64>> = body
-        .and_then(|Json(v)| {
-            v.get("ids")
-                .and_then(|arr| arr.as_array())
-                .filter(|arr| !arr.is_empty())
-                .map(|arr| {
-                    arr.iter().filter_map(|v| v.as_i64()).collect::<std::collections::HashSet<i64>>()
-                })
-        });
+    let filter_ids: Option<std::collections::HashSet<i64>> = body.and_then(|Json(v)| {
+        v.get("ids")
+            .and_then(|arr| arr.as_array())
+            .filter(|arr| !arr.is_empty())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_i64())
+                    .collect::<std::collections::HashSet<i64>>()
+            })
+    });
 
     let all_accounts = state.scheduler.all_accounts();
     let accounts: Vec<_> = if let Some(ref ids) = filter_ids {
-        all_accounts.iter().filter(|a| ids.contains(&a.db_id)).cloned().collect::<Vec<_>>()
+        all_accounts
+            .iter()
+            .filter(|a| ids.contains(&a.db_id))
+            .cloned()
+            .collect::<Vec<_>>()
     } else {
         all_accounts.to_vec()
     };
@@ -1043,7 +1073,8 @@ pub async fn batch_test(
         return Json(json!({
             "total": 0, "success": 0, "failed": 0,
             "banned": 0, "rate_limited": 0, "recovered": 0,
-        })).into_response();
+        }))
+        .into_response();
     }
 
     let (test_model, concurrency) = {
@@ -1083,7 +1114,10 @@ pub async fn batch_test(
         if let Ok(result) = h.await {
             match result {
                 BatchTestResult::Success => success += 1,
-                BatchTestResult::Recovered => { recovered += 1; success += 1; }
+                BatchTestResult::Recovered => {
+                    recovered += 1;
+                    success += 1;
+                }
                 BatchTestResult::RateLimited => rate_limited += 1,
                 BatchTestResult::Banned => banned += 1,
                 BatchTestResult::Failed => failed += 1,
@@ -1092,8 +1126,8 @@ pub async fn batch_test(
     }
 
     info!(
-        total, success, failed, banned, rate_limited, recovered,
-        "批量测试完成"
+        total,
+        success, failed, banned, rate_limited, recovered, "批量测试完成"
     );
 
     Json(json!({
@@ -1103,7 +1137,8 @@ pub async fn batch_test(
         "banned": banned,
         "rate_limited": rate_limited,
         "recovered": recovered,
-    })).into_response()
+    }))
+    .into_response()
 }
 
 enum BatchTestResult {
@@ -1115,11 +1150,7 @@ enum BatchTestResult {
 }
 
 /// 单个账号的批量测试逻辑
-async fn batch_test_one(
-    state: &AppState,
-    acc: &Arc<Account>,
-    model: &str,
-) -> BatchTestResult {
+async fn batch_test_one(state: &AppState, acc: &Arc<Account>, model: &str) -> BatchTestResult {
     let access_token = acc.access_token.read().clone();
     let account_proxy = acc.proxy_url.read().clone();
     let proxy_url = crate::proxy::handler::get_resolved_proxy(state, acc.db_id, &account_proxy);
@@ -1199,7 +1230,11 @@ async fn batch_test_one(
                 let effective_reset = if usage_5h >= 10000 && usage_7d < 10000 {
                     // 仅 5h 满 — 优先用 5h reset 时间
                     let r5 = acc.resets_5h_at.load(Ordering::Relaxed);
-                    if r5 > now_ts { r5 } else { acc.resets_at.load(Ordering::Relaxed) }
+                    if r5 > now_ts {
+                        r5
+                    } else {
+                        acc.resets_at.load(Ordering::Relaxed)
+                    }
                 } else {
                     acc.resets_at.load(Ordering::Relaxed)
                 };
@@ -1211,7 +1246,8 @@ async fn batch_test_one(
                     let aid = acc.db_id;
                     let until = now_ts + cooldown;
                     tokio::spawn(async move {
-                        let _ = queries::update_account_cooldown(&db, aid, until, "rate_limited").await;
+                        let _ =
+                            queries::update_account_cooldown(&db, aid, until, "rate_limited").await;
                     });
                 } else if acc.resets_at.load(Ordering::Relaxed) > now_ts {
                     let resets_at_cur = acc.resets_at.load(Ordering::Relaxed);
@@ -1222,19 +1258,28 @@ async fn batch_test_one(
                     let until = now_ts + cooldown;
                     tokio::spawn(async move {
                         let _ = queries::update_account_resets_at(&db, aid, resets_at_cur).await;
-                        let _ = queries::update_account_cooldown(&db, aid, until, "rate_limited").await;
+                        let _ =
+                            queries::update_account_cooldown(&db, aid, until, "rate_limited").await;
                     });
                 } else {
                     // 无有效 reset 时间 → 5h 满用 5h 兜底，7d 满用 7d 兜底
-                    let fallback_secs = if usage_5h >= 10000 && usage_7d < 10000 { 5 * 3600 } else { 7 * 24 * 3600 };
+                    let fallback_secs = if usage_5h >= 10000 && usage_7d < 10000 {
+                        5 * 3600
+                    } else {
+                        7 * 24 * 3600
+                    };
                     let fallback_ts = now_ts + fallback_secs;
                     acc.resets_at.store(fallback_ts, Ordering::Relaxed);
-                    state.scheduler.mark_cooldown(acc, "rate_limited", fallback_secs);
+                    state
+                        .scheduler
+                        .mark_cooldown(acc, "rate_limited", fallback_secs);
                     let db = state.db();
                     let aid = acc.db_id;
                     tokio::spawn(async move {
                         let _ = queries::update_account_resets_at(&db, aid, fallback_ts).await;
-                        let _ = queries::update_account_cooldown(&db, aid, fallback_ts, "rate_limited").await;
+                        let _ =
+                            queries::update_account_cooldown(&db, aid, fallback_ts, "rate_limited")
+                                .await;
                     });
                 }
 
@@ -1281,7 +1326,10 @@ async fn batch_test_one(
             let body = resp.text().await.unwrap_or_default();
             if acc.resets_at.load(Ordering::Relaxed) == 0 {
                 if let Ok(body_json) = serde_json::from_str::<serde_json::Value>(&body) {
-                    if let Some(ts) = body_json.pointer("/error/resets_at").and_then(|v| v.as_i64()) {
+                    if let Some(ts) = body_json
+                        .pointer("/error/resets_at")
+                        .and_then(|v| v.as_i64())
+                    {
                         acc.resets_at.store(ts, Ordering::Relaxed);
                         let db = state.db();
                         let aid = acc.db_id;
@@ -1293,9 +1341,8 @@ async fn batch_test_one(
             }
 
             // 设置冷却
-            let cooldown = crate::proxy::handler::parse_rate_limit_cooldown(
-                &resp_headers, &body, acc,
-            );
+            let cooldown =
+                crate::proxy::handler::parse_rate_limit_cooldown(&resp_headers, &body, acc);
             state.scheduler.mark_cooldown(acc, "rate_limited", cooldown);
             {
                 let db = state.db();
@@ -1463,11 +1510,15 @@ pub async fn usage_logs(
 
     let range_start;
     let start = if q.start.is_none() && q.end.is_none() {
-        range_start = q.range.as_deref().and_then(range_to_minutes).map(|minutes| {
-            (chrono::Utc::now() - chrono::Duration::minutes(minutes))
-                .format("%Y-%m-%dT%H:%M:%S")
-                .to_string()
-        });
+        range_start = q
+            .range
+            .as_deref()
+            .and_then(range_to_minutes)
+            .map(|minutes| {
+                (chrono::Utc::now() - chrono::Duration::minutes(minutes))
+                    .format("%Y-%m-%dT%H:%M:%S")
+                    .to_string()
+            });
         range_start.as_deref()
     } else {
         q.start.as_deref()
@@ -1564,9 +1615,17 @@ pub async fn ops_overview(
     let pool_in_use = pool_size - pool_idle;
     let pool_max = {
         let s = state.db_settings_cache.read().unwrap();
-        if s.pg_max_conns > 0 { s.pg_max_conns as i64 } else { state.config.db_pool_size as i64 }
+        if s.pg_max_conns > 0 {
+            s.pg_max_conns as i64
+        } else {
+            state.config.db_pool_size as i64
+        }
     };
-    let pg_usage = if pool_max > 0 { pool_in_use as f64 / pool_max as f64 * 100.0 } else { 0.0 };
+    let pg_usage = if pool_max > 0 {
+        pool_in_use as f64 / pool_max as f64 * 100.0
+    } else {
+        0.0
+    };
 
     // in-process 缓存（内存缓存，始终健康）
     let cache_size = state.token_cache.len() as i64;
@@ -1723,7 +1782,7 @@ pub async fn update_settings(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error": e.to_string()})),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -1745,10 +1804,16 @@ pub async fn update_settings(
     if let Some(v) = input.get("admin_secret").and_then(|v| v.as_str()) {
         settings.admin_secret = v.to_string();
     }
-    if let Some(v) = input.get("auto_clean_unauthorized").and_then(|v| v.as_bool()) {
+    if let Some(v) = input
+        .get("auto_clean_unauthorized")
+        .and_then(|v| v.as_bool())
+    {
         settings.auto_clean_unauthorized = v;
     }
-    if let Some(v) = input.get("auto_clean_rate_limited").and_then(|v| v.as_bool()) {
+    if let Some(v) = input
+        .get("auto_clean_rate_limited")
+        .and_then(|v| v.as_bool())
+    {
         settings.auto_clean_rate_limited = v;
     }
     if let Some(v) = input.get("auto_clean_full_usage").and_then(|v| v.as_bool()) {
@@ -1760,7 +1825,10 @@ pub async fn update_settings(
     if let Some(v) = input.get("auto_clean_expired").and_then(|v| v.as_bool()) {
         settings.auto_clean_expired = v;
     }
-    if let Some(v) = input.get("fast_scheduler_enabled").and_then(|v| v.as_bool()) {
+    if let Some(v) = input
+        .get("fast_scheduler_enabled")
+        .and_then(|v| v.as_bool())
+    {
         settings.fast_scheduler_enabled = v;
     }
     if let Some(v) = input.get("proxy_url").and_then(|v| v.as_str()) {
@@ -1789,7 +1857,14 @@ pub async fn update_settings(
     let old_max = state.db().size() as i32;
     let new_max = settings.pg_max_conns.clamp(5, 500);
     if new_max != old_max as i32 {
-        match crate::db::init(&state.config.database_url, new_max as u32, state.config.db_begin_concurrent, state.config.db_multiprocess_wal).await {
+        match crate::db::init(
+            &state.config.database_url,
+            new_max as u32,
+            state.config.db_begin_concurrent,
+            state.config.db_multiprocess_wal,
+        )
+        .await
+        {
             Ok(new_pool) => {
                 state.replace_db(new_pool);
                 tracing::info!(old = old_max, new = new_max, "Turso 逻辑连接上限已动态调整");
@@ -1945,7 +2020,8 @@ pub async fn clean_rate_limited(
         if acc.is_in_cooldown() {
             let _ = queries::delete_account(&state.db(), acc.db_id).await;
             state.scheduler.remove_account(acc.db_id);
-            queries::insert_account_event(&state.db(), acc.db_id, "deleted", "clean_rate_limited").await;
+            queries::insert_account_event(&state.db(), acc.db_id, "deleted", "clean_rate_limited")
+                .await;
             cleaned += 1;
         }
     }
@@ -2033,11 +2109,17 @@ pub async fn import_accounts(
         "json" => import_json(state, file_datas, proxy_url).await,
         // txt 格式：合并所有文件内容（用换行拼接）
         _ => {
-            let merged: Vec<u8> = file_datas.into_iter().enumerate().fold(Vec::new(), |mut acc, (i, d)| {
-                if i > 0 { acc.push(b'\n'); }
-                acc.extend(d);
-                acc
-            });
+            let merged: Vec<u8> =
+                file_datas
+                    .into_iter()
+                    .enumerate()
+                    .fold(Vec::new(), |mut acc, (i, d)| {
+                        if i > 0 {
+                            acc.push(b'\n');
+                        }
+                        acc.extend(d);
+                        acc
+                    });
             if format == "at_txt" {
                 import_at_txt(state, merged, proxy_url).await
             } else {
@@ -2092,7 +2174,9 @@ async fn import_at_txt(
     }
 
     // 数据库去重
-    let existing = queries::get_all_access_tokens(&state.db()).await.unwrap_or_default();
+    let existing = queries::get_all_access_tokens(&state.db())
+        .await
+        .unwrap_or_default();
     let mut new_tokens: Vec<String> = Vec::new();
     let mut duplicate_count = 0usize;
     for at in &tokens {
@@ -2159,7 +2243,14 @@ async fn import_at_txt(
                     info.email.clone()
                 };
 
-                match queries::insert_at_account_if_new_identity(&state.db(), &name, &creds, &proxy_url).await {
+                match queries::insert_at_account_if_new_identity(
+                    &state.db(),
+                    &name,
+                    &creds,
+                    &proxy_url,
+                )
+                .await
+                {
                     Ok(Some(id)) => {
                         let account = Arc::new(Account::new(id));
                         *account.email.write() = info.email;
@@ -2224,7 +2315,9 @@ async fn import_at_txt(
         .header("Cache-Control", "no-cache")
         .header("Connection", "keep-alive")
         .header("X-Accel-Buffering", "no")
-        .body(axum::body::Body::from_stream(stream.map(Ok::<_, std::convert::Infallible>)))
+        .body(axum::body::Body::from_stream(
+            stream.map(Ok::<_, std::convert::Infallible>),
+        ))
         .unwrap()
 }
 
@@ -2250,7 +2343,9 @@ async fn import_rt_txt(
     }
 
     // 数据库去重
-    let existing = queries::get_all_refresh_tokens(&state.db()).await.unwrap_or_default();
+    let existing = queries::get_all_refresh_tokens(&state.db())
+        .await
+        .unwrap_or_default();
     let mut new_tokens: Vec<String> = Vec::new();
     let mut duplicate_count = 0usize;
     for rt in &tokens {
@@ -2298,8 +2393,8 @@ async fn import_rt_txt(
                 match token::refresh::refresh_with_retry(&client, &rt).await {
                     Ok(token_resp) => {
                         let info = token::parse_id_token(&token_resp.id_token).unwrap_or_default();
-                        let expires_at = chrono::Utc::now()
-                            + chrono::Duration::seconds(token_resp.expires_in);
+                        let expires_at =
+                            chrono::Utc::now() + chrono::Duration::seconds(token_resp.expires_in);
 
                         let creds = Credentials {
                             refresh_token: if token_resp.refresh_token.is_empty() {
@@ -2316,8 +2411,19 @@ async fn import_rt_txt(
                             ..Default::default()
                         };
 
-                        let name = if info.email.is_empty() { rt[..8.min(rt.len())].to_string() } else { info.email.clone() };
-                        match queries::insert_account_if_new_identity(&state.db(), &name, &creds, &proxy_url).await {
+                        let name = if info.email.is_empty() {
+                            rt[..8.min(rt.len())].to_string()
+                        } else {
+                            info.email.clone()
+                        };
+                        match queries::insert_account_if_new_identity(
+                            &state.db(),
+                            &name,
+                            &creds,
+                            &proxy_url,
+                        )
+                        .await
+                        {
                             Ok(Some(id)) => {
                                 let account = Arc::new(Account::new(id));
                                 *account.email.write() = info.email;
@@ -2327,7 +2433,13 @@ async fn import_rt_txt(
                                 *account.refresh_token.write() = creds.refresh_token;
                                 *account.expires_at.write() = expires_at;
                                 state.scheduler.add_account(account);
-                                queries::insert_account_event(&state.db(), id, "added", "import_rt").await;
+                                queries::insert_account_event(
+                                    &state.db(),
+                                    id,
+                                    "added",
+                                    "import_rt",
+                                )
+                                .await;
                                 success.fetch_add(1, Ordering::Relaxed);
                             }
                             Ok(None) => {
@@ -2387,7 +2499,9 @@ async fn import_rt_txt(
         .header("Cache-Control", "no-cache")
         .header("Connection", "keep-alive")
         .header("X-Accel-Buffering", "no")
-        .body(axum::body::Body::from_stream(stream.map(Ok::<_, std::convert::Infallible>)))
+        .body(axum::body::Body::from_stream(
+            stream.map(Ok::<_, std::convert::Infallible>),
+        ))
         .unwrap()
 }
 
@@ -2443,7 +2557,8 @@ async fn import_json(
     }
 
     if rt_tokens.is_empty() && at_tokens.is_empty() {
-        return Json(json!({"error": "JSON 文件中未找到有效的 refresh_token 或 access_token"})).into_response();
+        return Json(json!({"error": "JSON 文件中未找到有效的 refresh_token 或 access_token"}))
+            .into_response();
     }
 
     // AT is preferred per-entry above. RT is only used for RT-only entries.
@@ -2457,7 +2572,12 @@ async fn import_json(
         // 混合模式：先导入 RT，再导入 AT
         // 为简化 SSE 流处理，合并为两批串行执行
         // RT 优先（数量通常较少且需要网络验证）
-        import_rt_txt(state.clone(), rt_tokens.join("\n").into_bytes(), proxy_url.clone()).await;
+        import_rt_txt(
+            state.clone(),
+            rt_tokens.join("\n").into_bytes(),
+            proxy_url.clone(),
+        )
+        .await;
         import_at_txt(state, at_tokens.join("\n").into_bytes(), proxy_url).await
     }
 }
@@ -2502,7 +2622,11 @@ pub async fn list_proxies(
     }
     match queries::list_proxies(&state.db()).await {
         Ok(proxies) => Json(json!({ "proxies": proxies })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -2549,7 +2673,8 @@ pub async fn add_proxies(
         "message": "ok",
         "inserted": inserted,
         "total": inserted,
-    })).into_response()
+    }))
+    .into_response()
 }
 
 pub async fn delete_proxy(
@@ -2565,7 +2690,11 @@ pub async fn delete_proxy(
             let _ = crate::proxy::handler::refresh_enabled_proxies(&state).await;
             Json(json!({ "message": "ok" })).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -2590,7 +2719,11 @@ pub async fn update_proxy(
             let _ = crate::proxy::handler::refresh_enabled_proxies(&state).await;
             Json(json!({ "message": "ok" })).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -2614,7 +2747,11 @@ pub async fn batch_delete_proxies(
             let _ = crate::proxy::handler::refresh_enabled_proxies(&state).await;
             Json(json!({ "message": "ok", "deleted": deleted })).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -2636,7 +2773,11 @@ pub async fn test_proxy(
 
     let url = req.url.trim().to_string();
     if url.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "proxy url is empty" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "proxy url is empty" })),
+        )
+            .into_response();
     }
 
     let lang = req.lang.unwrap_or_else(|| "zh-CN".to_string());
@@ -2651,7 +2792,8 @@ pub async fn test_proxy(
         return Json(json!({
             "success": false,
             "error": "invalid proxy url format",
-        })).into_response();
+        }))
+        .into_response();
     }
 
     let client = builder.build().unwrap_or_else(|_| reqwest::Client::new());
@@ -2669,7 +2811,14 @@ pub async fn test_proxy(
                     let location = parsed.location();
 
                     if let Some(id) = req.id {
-                        let _ = queries::update_proxy_test_result(&state.db(), id, &parsed.ip, &location, latency_ms).await;
+                        let _ = queries::update_proxy_test_result(
+                            &state.db(),
+                            id,
+                            &parsed.ip,
+                            &location,
+                            latency_ms,
+                        )
+                        .await;
                     }
 
                     return Json(json!({
@@ -2681,20 +2830,21 @@ pub async fn test_proxy(
                         "isp": parsed.isp,
                         "location": location,
                         "latency_ms": latency_ms,
-                    })).into_response();
+                    }))
+                    .into_response();
                 }
             }
             Json(json!({
                 "success": false,
                 "error": "failed to parse geo-ip response",
-            })).into_response()
+            }))
+            .into_response()
         }
-        Err(e) => {
-            Json(json!({
-                "success": false,
-                "error": e.to_string(),
-            })).into_response()
-        }
+        Err(e) => Json(json!({
+            "success": false,
+            "error": e.to_string(),
+        }))
+        .into_response(),
     }
 }
 
@@ -2732,15 +2882,32 @@ fn parse_proxy_test_geoip(ip_info: &Value) -> Option<ProxyTestGeoIp> {
         .get("connection")
         .and_then(|v| v.get("isp"))
         .and_then(|s| s.as_str())
-        .or_else(|| ip_info.get("connection").and_then(|v| v.get("org")).and_then(|s| s.as_str()))
+        .or_else(|| {
+            ip_info
+                .get("connection")
+                .and_then(|v| v.get("org"))
+                .and_then(|s| s.as_str())
+        })
         .unwrap_or("")
         .to_string();
 
     Some(ProxyTestGeoIp {
         ip,
-        country: ip_info.get("country").and_then(|s| s.as_str()).unwrap_or("").to_string(),
-        region: ip_info.get("region").and_then(|s| s.as_str()).unwrap_or("").to_string(),
-        city: ip_info.get("city").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+        country: ip_info
+            .get("country")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string(),
+        region: ip_info
+            .get("region")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string(),
+        city: ip_info
+            .get("city")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string(),
         isp,
     })
 }
