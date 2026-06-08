@@ -54,9 +54,9 @@ async fn main() {
 
     sync_config_proxies(&boot_pool, &config, &mut settings).await;
 
-    // 用 pg_max_conns 兼容字段创建 Turso 逻辑连接上限
-    let pool_size = if settings.pg_max_conns > 0 {
-        settings.pg_max_conns as u32
+    // 用 db_max_conns 创建 Turso 逻辑连接上限
+    let pool_size = if settings.db_max_conns > 0 {
+        settings.db_max_conns as u32
     } else {
         config.db_pool_size
     };
@@ -76,7 +76,7 @@ async fn main() {
     info!(
         max_concurrency = settings.max_concurrency,
         global_rpm = settings.global_rpm,
-        pg_max_conns = pool_size,
+        db_max_conns = pool_size,
         "系统设置已加载"
     );
 
@@ -528,7 +528,10 @@ mod tests {
     }
 
     async fn test_state() -> Arc<AppState> {
-        let config = test_config();
+        test_state_with_config(test_config()).await
+    }
+
+    async fn test_state_with_config(config: AppConfig) -> Arc<AppState> {
         let db = db::init(
             &config.database_url,
             config.db_pool_size,
@@ -573,6 +576,67 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn settings_db_max_conns_updates_persisted_and_runtime_limit() {
+        let db_path = std::env::temp_dir().join(format!(
+            "ap-settings-db-max-conns-{}-{}.db",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let mut config = test_config();
+        config.database_url = db_path.to_string_lossy().to_string();
+        let state = test_state_with_config(config).await;
+        let app = build_router(state.clone());
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/admin/settings")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"db_max_conns":37}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["db_max_conns"], 37);
+        assert!(json.get("pg_max_conns").is_none());
+        assert_eq!(state.db().size(), 37);
+
+        let persisted = db::queries::get_system_settings(&state.db()).await.unwrap();
+        assert_eq!(persisted.db_max_conns, 37);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/admin/settings")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["db_max_conns"], 37);
+        assert!(json.get("pg_max_conns").is_none());
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(db_path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(db_path.with_extension("db-shm"));
     }
 }
 

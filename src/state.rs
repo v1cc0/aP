@@ -70,7 +70,7 @@ impl AppState {
         self.db.read().unwrap().clone()
     }
 
-    /// 替换连接池（用于动态修改 pg_max_conns）
+    /// 替换连接池（用于动态修改 db_max_conns）
     pub fn replace_db(&self, new_pool: DbPool) {
         *self.db.write().unwrap() = new_pool;
     }

@@ -1613,16 +1613,16 @@ pub async fn ops_overview(
     let pool_size = db.size() as i64;
     let pool_idle = db.num_idle() as i64;
     let pool_in_use = pool_size - pool_idle;
-    let pool_max = {
+    let db_max = {
         let s = state.db_settings_cache.read().unwrap();
-        if s.pg_max_conns > 0 {
-            s.pg_max_conns as i64
+        if s.db_max_conns > 0 {
+            s.db_max_conns as i64
         } else {
             state.config.db_pool_size as i64
         }
     };
-    let pg_usage = if pool_max > 0 {
-        pool_in_use as f64 / pool_max as f64 * 100.0
+    let db_usage = if db_max > 0 {
+        pool_in_use as f64 / db_max as f64 * 100.0
     } else {
         0.0
     };
@@ -1655,8 +1655,8 @@ pub async fn ops_overview(
         "turso": {
             "healthy": true,
             "open": pool_size, "in_use": pool_in_use, "idle": pool_idle,
-            "max_open": pool_max,
-            "wait_count": 0, "usage_percent": pg_usage,
+            "max_open": db_max,
+            "wait_count": 0, "usage_percent": db_usage,
         },
         "redis": {
             "healthy": true,
@@ -1747,7 +1747,7 @@ pub async fn get_settings(
                 "max_retries": s.max_retries,
                 "proxy_pool_enabled": s.proxy_pool_enabled,
                 "allow_remote_migration": false,
-                "pg_max_conns": state.config.db_pool_size,
+                "db_max_conns": s.db_max_conns,
                 "redis_pool_size": 0,
                 "database_driver": "turso",
                 "database_label": "TursoDB",
@@ -1800,6 +1800,9 @@ pub async fn update_settings(
     }
     if let Some(v) = input.get("max_retries").and_then(|v| v.as_i64()) {
         settings.max_retries = v as i32;
+    }
+    if let Some(v) = input.get("db_max_conns").and_then(|v| v.as_i64()) {
+        settings.db_max_conns = v.clamp(5, 500) as i32;
     }
     if let Some(v) = input.get("admin_secret").and_then(|v| v.as_str()) {
         settings.admin_secret = v.to_string();
@@ -1855,7 +1858,7 @@ pub async fn update_settings(
 
     // 动态修改 Turso 逻辑连接上限
     let old_max = state.db().size() as i32;
-    let new_max = settings.pg_max_conns.clamp(5, 500);
+    let new_max = settings.db_max_conns.clamp(5, 500);
     if new_max != old_max as i32 {
         match crate::db::init(
             &state.config.database_url,

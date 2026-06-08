@@ -170,7 +170,7 @@ export interface SystemSettings {
   test_model: string
   test_concurrency: number
   proxy_url?: string
-  pg_max_conns: number
+  db_max_conns: number
   redis_pool_size: number
   auto_clean_unauthorized: boolean
   auto_clean_rate_limited: boolean

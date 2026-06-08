@@ -44,7 +44,7 @@ export default function Settings() {
     global_rpm: 0,
     test_model: '',
     test_concurrency: 50,
-    pg_max_conns: 50,
+    db_max_conns: 50,
     redis_pool_size: 30,
     auto_clean_unauthorized: false,
     auto_clean_rate_limited: false,
@@ -390,15 +390,15 @@ export default function Settings() {
                 <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-4 mb-4">
                   {isExternalDatabase ? (
                     <div>
-                      <label className="block mb-2 text-sm font-semibold text-muted-foreground">{t('settings.pgMaxConns')}</label>
+                      <label className="block mb-2 text-sm font-semibold text-muted-foreground">{t('settings.dbMaxConns')}</label>
                       <Input
                         type="number"
                         min={5}
                         max={500}
-                        value={settingsForm.pg_max_conns}
-                        onChange={(e: ChangeEvent<HTMLInputElement>) => setSettingsForm(f => ({ ...f, pg_max_conns: parseInt(e.target.value) || 50 }))}
+                        value={settingsForm.db_max_conns}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => setSettingsForm(f => ({ ...f, db_max_conns: parseInt(e.target.value) || 50 }))}
                       />
-                      <p className="text-xs text-muted-foreground mt-1">{t('settings.pgMaxConnsRange')}</p>
+                      <p className="text-xs text-muted-foreground mt-1">{t('settings.dbMaxConnsRange')}</p>
                     </div>
                   ) : null}
                   {isExternalCache ? (

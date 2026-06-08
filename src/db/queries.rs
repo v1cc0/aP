@@ -66,7 +66,7 @@ fn settings_row(r: &DbRow) -> Result<SystemSettings> {
         auto_clean_expired: r.get_bool("auto_clean_expired")?,
         fast_scheduler_enabled: r.get_bool("fast_scheduler_enabled")?,
         max_retries: r.get_i32("max_retries")?,
-        pg_max_conns: r.get_i32("pg_max_conns")?,
+        db_max_conns: r.get_i32("db_max_conns")?,
         proxy_pool_enabled: r.get_bool("proxy_pool_enabled")?,
     })
 }
@@ -403,12 +403,12 @@ pub async fn query_usage_logs_filtered(
 }
 
 pub async fn get_system_settings(pool: &DbPool) -> Result<SystemSettings> {
-    settings_row(&pool.query_one("SELECT max_concurrency, global_rpm, test_model, test_concurrency, proxy_url, admin_secret, auto_clean_unauthorized, auto_clean_rate_limited, auto_clean_full_usage, auto_clean_error, auto_clean_expired, fast_scheduler_enabled, max_retries, pg_max_conns, proxy_pool_enabled FROM system_settings WHERE id = 1", vec![]).await?)
+    settings_row(&pool.query_one("SELECT max_concurrency, global_rpm, test_model, test_concurrency, proxy_url, admin_secret, auto_clean_unauthorized, auto_clean_rate_limited, auto_clean_full_usage, auto_clean_error, auto_clean_expired, fast_scheduler_enabled, max_retries, db_max_conns, proxy_pool_enabled FROM system_settings WHERE id = 1", vec![]).await?)
 }
 
 pub async fn update_system_settings(pool: &DbPool, s: &SystemSettings) -> Result<()> {
-    pool.execute_write("UPDATE system_settings SET max_concurrency=?1, global_rpm=?2, test_model=?3, test_concurrency=?4, proxy_url=?5, admin_secret=?6, auto_clean_unauthorized=?7, auto_clean_rate_limited=?8, auto_clean_full_usage=?9, auto_clean_error=?10, auto_clean_expired=?11, fast_scheduler_enabled=?12, max_retries=?13, pg_max_conns=?14, proxy_pool_enabled=?15 WHERE id = 1",
-        vec![v_i32(s.max_concurrency), v_i32(s.global_rpm), v_str(&s.test_model), v_i32(s.test_concurrency), v_str(&s.proxy_url), v_str(&s.admin_secret), v_bool(s.auto_clean_unauthorized), v_bool(s.auto_clean_rate_limited), v_bool(s.auto_clean_full_usage), v_bool(s.auto_clean_error), v_bool(s.auto_clean_expired), v_bool(s.fast_scheduler_enabled), v_i32(s.max_retries), v_i32(s.pg_max_conns), v_bool(s.proxy_pool_enabled)]).await?;
+    pool.execute_write("UPDATE system_settings SET max_concurrency=?1, global_rpm=?2, test_model=?3, test_concurrency=?4, proxy_url=?5, admin_secret=?6, auto_clean_unauthorized=?7, auto_clean_rate_limited=?8, auto_clean_full_usage=?9, auto_clean_error=?10, auto_clean_expired=?11, fast_scheduler_enabled=?12, max_retries=?13, db_max_conns=?14, proxy_pool_enabled=?15 WHERE id = 1",
+        vec![v_i32(s.max_concurrency), v_i32(s.global_rpm), v_str(&s.test_model), v_i32(s.test_concurrency), v_str(&s.proxy_url), v_str(&s.admin_secret), v_bool(s.auto_clean_unauthorized), v_bool(s.auto_clean_rate_limited), v_bool(s.auto_clean_full_usage), v_bool(s.auto_clean_error), v_bool(s.auto_clean_expired), v_bool(s.fast_scheduler_enabled), v_i32(s.max_retries), v_i32(s.db_max_conns), v_bool(s.proxy_pool_enabled)]).await?;
     Ok(())
 }
 

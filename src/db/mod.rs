@@ -22,7 +22,7 @@ impl DbPool {
     }
 
     pub fn size(&self) -> u32 {
-        1
+        self.max_connections
     }
     pub fn num_idle(&self) -> usize {
         self.permits.available_permits()
@@ -297,7 +297,7 @@ async fn create_tables(pool: &DbPool) -> Result<()> {
             test_model TEXT NOT NULL DEFAULT 'gpt-5.4-mini', test_concurrency INTEGER NOT NULL DEFAULT 50, proxy_url TEXT NOT NULL DEFAULT '', admin_secret TEXT NOT NULL DEFAULT '',
             auto_clean_unauthorized INTEGER NOT NULL DEFAULT 0, auto_clean_rate_limited INTEGER NOT NULL DEFAULT 0, auto_clean_full_usage INTEGER NOT NULL DEFAULT 0,
             auto_clean_error INTEGER NOT NULL DEFAULT 0, auto_clean_expired INTEGER NOT NULL DEFAULT 0, fast_scheduler_enabled INTEGER NOT NULL DEFAULT 0,
-            max_retries INTEGER NOT NULL DEFAULT 2, pg_max_conns INTEGER NOT NULL DEFAULT 256, proxy_pool_enabled INTEGER NOT NULL DEFAULT 0)",
+            max_retries INTEGER NOT NULL DEFAULT 2, db_max_conns INTEGER NOT NULL DEFAULT 256, proxy_pool_enabled INTEGER NOT NULL DEFAULT 0)",
         "INSERT OR IGNORE INTO system_settings (id) VALUES (1)",
         "CREATE TABLE IF NOT EXISTS usage_stats_baseline (id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1), total_requests INTEGER NOT NULL DEFAULT 0, total_tokens INTEGER NOT NULL DEFAULT 0, prompt_tokens INTEGER NOT NULL DEFAULT 0, completion_tokens INTEGER NOT NULL DEFAULT 0, cached_tokens INTEGER NOT NULL DEFAULT 0)",
         "INSERT OR IGNORE INTO usage_stats_baseline (id) VALUES (1)",
@@ -326,15 +326,30 @@ async fn create_tables(pool: &DbPool) -> Result<()> {
         "ALTER TABLE usage_logs ADD COLUMN tt_group_id TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE usage_logs ADD COLUMN tt_provider_account_id TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE usage_logs ADD COLUMN tt_provider_platform TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE system_settings ADD COLUMN pg_max_conns INTEGER NOT NULL DEFAULT 256",
+        "ALTER TABLE system_settings ADD COLUMN db_max_conns INTEGER NOT NULL DEFAULT 256",
         "ALTER TABLE system_settings ADD COLUMN proxy_pool_enabled INTEGER NOT NULL DEFAULT 0",
     ] {
         let _ = pool.execute(sql, vec![]).await;
     }
-    pool.execute(
-        "UPDATE system_settings SET pg_max_conns = 256 WHERE id = 1 AND pg_max_conns = 20",
-        vec![],
-    )
-    .await?;
+    // Legacy compatibility: older aP builds named the Turso logical connection
+    // limit `pg_max_conns`, even though this project no longer uses Postgres.
+    // Copy the old value into the neutral `db_max_conns` column when upgrading.
+    let _ = pool
+        .execute(
+            "UPDATE system_settings
+             SET db_max_conns = (
+                 SELECT pg_max_conns
+                 FROM system_settings AS legacy
+                 WHERE legacy.id = system_settings.id
+             )
+             WHERE db_max_conns = 256
+               AND EXISTS (
+                   SELECT 1
+                   FROM pragma_table_info('system_settings')
+                   WHERE name = 'pg_max_conns'
+               )",
+            vec![],
+        )
+        .await;
     Ok(())
 }

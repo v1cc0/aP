@@ -139,13 +139,13 @@ pub struct SystemSettings {
     pub auto_clean_expired: bool,
     pub fast_scheduler_enabled: bool,
     pub max_retries: i32,
-    #[serde(default = "default_pg_max_conns")]
-    pub pg_max_conns: i32,
+    #[serde(default = "default_db_max_conns")]
+    pub db_max_conns: i32,
     #[serde(default)]
     pub proxy_pool_enabled: bool,
 }
 
-fn default_pg_max_conns() -> i32 {
+fn default_db_max_conns() -> i32 {
     256
 }
 
