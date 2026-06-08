@@ -20,6 +20,7 @@ pub const MAX_REQUEST_BODY_SIZE: usize = 32 * 1024 * 1024; // 32 MiB
 
 /// 支持的模型列表
 pub const SUPPORTED_MODELS: &[&str] = &[
+    "gpt-5.5",
     "gpt-5.4",
     "gpt-5.4-mini",
     "gpt-5",

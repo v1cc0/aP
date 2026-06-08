@@ -308,39 +308,7 @@ async fn proxy_request(
 
         // ── 构建上游请求体 ──
 
-        let mut upstream_body = if translate {
-            translator::translate_chat_to_responses(&body_json)
-        } else {
-            body_json.clone()
-        };
-
-        // 必需字段
-        if upstream_body.get("instructions").is_none() {
-            upstream_body["instructions"] = Value::String(String::new());
-        }
-        // compact 模式下保留客户端原始 stream 取值（透传），其它模式强制流式
-        if mode != ProxyMode::Compact {
-            upstream_body["stream"] = Value::Bool(true);
-        }
-        upstream_body["store"] = Value::Bool(false);
-        if upstream_body.get("include").is_none() {
-            upstream_body["include"] =
-                serde_json::json!(["reasoning.encrypted_content"]);
-        }
-
-        // 清理 Codex 不支持的字段
-        translator::strip_unsupported_fields(&mut upstream_body);
-
-        // 自动将字符串 input 包装为数组格式（Codex 要求 input 为 list）
-        if let Some(input) = upstream_body.get("input") {
-            if input.is_string() {
-                let text = input.as_str().unwrap_or("").to_string();
-                upstream_body["input"] = serde_json::json!([{
-                    "role": "user",
-                    "content": text,
-                }]);
-            }
-        }
+        let mut upstream_body = prepare_upstream_body(&body_json, translate, mode);
 
         // Session / prompt cache
         let session_id = resolve_session_id(&body_json, &headers, &account_id_str);
@@ -359,6 +327,7 @@ async fn proxy_request(
             endpoint,
             upstream_url = %upstream_url,
             proxy = %proxy_display,
+            upstream_stream = upstream_body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false),
             account_id = account.db_id,
             email = %account_email,
             model = %model,
@@ -1829,6 +1798,42 @@ pub fn get_resolved_proxy(state: &AppState, account_id: i64, account_proxy: &str
     state.config.proxy_url.clone().unwrap_or_default()
 }
 
+fn prepare_upstream_body(body_json: &Value, translate: bool, _mode: ProxyMode) -> Value {
+    let mut upstream_body = if translate {
+        translator::translate_chat_to_responses(body_json)
+    } else {
+        body_json.clone()
+    };
+
+    // 必需字段
+    if upstream_body.get("instructions").is_none() {
+        upstream_body["instructions"] = Value::String(String::new());
+    }
+    // Codex 上游 /responses 和 /responses/compact 都要求 stream=true；
+    // compact 只是返回形态不同，不能把客户端 stream=false 透给上游。
+    upstream_body["stream"] = Value::Bool(true);
+    upstream_body["store"] = Value::Bool(false);
+    if upstream_body.get("include").is_none() {
+        upstream_body["include"] = serde_json::json!(["reasoning.encrypted_content"]);
+    }
+
+    // 清理 Codex 不支持的字段
+    translator::strip_unsupported_fields(&mut upstream_body);
+
+    // 自动将字符串 input 包装为数组格式（Codex 要求 input 为 list）
+    if let Some(input) = upstream_body.get("input") {
+        if input.is_string() {
+            let text = input.as_str().unwrap_or("").to_string();
+            upstream_body["input"] = serde_json::json!([{
+                "role": "user",
+                "content": text,
+            }]);
+        }
+    }
+
+    upstream_body
+}
+
 fn display_proxy_url(proxy_url: &str) -> String {
     if proxy_url.is_empty() {
         return "direct".to_string();
@@ -1874,6 +1879,43 @@ mod tests {
             display_proxy_url("http://127.0.0.1:8787"),
             "http://127.0.0.1:8787"
         );
+    }
+
+    #[test]
+    fn compact_upstream_body_forces_streaming_for_upstream() {
+        let body = serde_json::json!({
+            "model": "gpt-5.5",
+            "input": "compact this context",
+            "stream": false,
+            "store": true
+        });
+
+        let upstream = prepare_upstream_body(&body, false, ProxyMode::Compact);
+
+        assert_eq!(upstream["stream"], Value::Bool(true));
+        assert_eq!(upstream["store"], Value::Bool(false));
+        assert_eq!(upstream["instructions"], Value::String(String::new()));
+        assert_eq!(upstream["input"][0]["role"], "user");
+    }
+
+    #[test]
+    fn stream_upstream_body_forces_streaming() {
+        let body = serde_json::json!({
+            "model": "gpt-5.5",
+            "input": [{"role": "user", "content": "hello"}],
+            "stream": false
+        });
+
+        let upstream = prepare_upstream_body(&body, false, ProxyMode::Stream);
+
+        assert_eq!(upstream["stream"], Value::Bool(true));
+        assert_eq!(upstream["store"], Value::Bool(false));
+    }
+
+    #[test]
+    fn compact_validator_accepts_latest_model() {
+        let body = Bytes::from_static(br#"{"model":"gpt-5.5","input":"hello"}"#);
+        assert!(validate_responses_body(&body, true).is_none());
     }
 
     #[test]
